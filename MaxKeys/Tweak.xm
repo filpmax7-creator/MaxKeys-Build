@@ -1,6 +1,4 @@
 #import <UIKit/UIKit.h>
-#import <Security/Security.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
 #import <CommonCrypto/CommonDigest.h>
 
@@ -46,7 +44,7 @@ static void record(NSData *data, NSString *ext) {
 }
 static void saveValues(NSArray *items) {
  for(NSDictionary *item in items){
-    for(NSString *key in @[@"public.png",@"public.jpeg",@"public.image",@"public.utf8-plain-text",@"public.text",@"public.url"]){
+    for(NSString *key in @[@"public.png",@"public.jpeg",@"public.image",@"public.utf8-plain-text",@"public.plain-text",@"public.text",@"public.url"]){
       id value=item[key];if(!value)continue;
       if([value isKindOfClass:NSURL.class])value=[value absoluteString];
       if([value isKindOfClass:NSString.class])record([value dataUsingEncoding:NSUTF8StringEncoding],@"txt");
@@ -60,13 +58,16 @@ static void saveValues(NSArray *items) {
  }
 }
 %hook UIPasteboard
+-(void)setData:(NSData *)data forPasteboardType:(NSString *)type { %orig; if(self==UIPasteboard.generalPasteboard && data && type)saveValues(@[@{type:data}]); }
+-(void)setURL:(NSURL *)url { %orig; if(self==UIPasteboard.generalPasteboard && url)record([url.absoluteString dataUsingEncoding:NSUTF8StringEncoding],@"txt"); }
+-(void)addItems:(NSArray *)items { %orig; if(self==UIPasteboard.generalPasteboard)saveValues(items); }
 -(void)setString:(NSString *)s { %orig; if(self==UIPasteboard.generalPasteboard)record([s dataUsingEncoding:NSUTF8StringEncoding],@"txt"); }
 -(void)setImage:(UIImage *)i { %orig; if(i&&self==UIPasteboard.generalPasteboard)record(UIImagePNGRepresentation(i),@"png"); }
 -(void)setItems:(NSArray *)items { %orig; if(self==UIPasteboard.generalPasteboard)saveValues(items); }
 -(void)setItems:(NSArray *)items options:(NSDictionary *)options { %orig; if(self==UIPasteboard.generalPasteboard)saveValues(items); }
 %end
 
-@interface MKArchive : UITableViewController <UISearchResultsUpdating,UIDocumentPickerDelegate>
+@interface MKArchive : UITableViewController <UISearchResultsUpdating>
 @property(nonatomic,weak) UIView<UITextInput> *target;
 @property(nonatomic,strong) NSArray<NSURL *> *files;
 @property(nonatomic,strong) NSArray<NSURL *> *visible;
@@ -87,35 +88,12 @@ static void saveValues(NSArray *items) {
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];
     self.modalInPresentation=YES;
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash target:self action:@selector(emptyTrash)];
-    self.pasteConfiguration=[[UIPasteConfiguration alloc] initWithAcceptableTypeIdentifiers:@[@"public.image",@"public.plain-text",@"public.url"]];
-    UIPasteControlConfiguration *cfg=[UIPasteControlConfiguration new]; cfg.displayMode=UIPasteControlDisplayModeIconOnly;
-    UIPasteControl *import=[[UIPasteControl alloc] initWithConfiguration:cfg]; import.target=self;
-    UIBarButtonItem *folder=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"folder"] style:UIBarButtonItemStylePlain target:self action:@selector(chooseFolder)];
-    folder.accessibilityLabel=@"اختيار مجلد السجل المشترك";
-    self.navigationItem.rightBarButtonItems=@[self.navigationItem.rightBarButtonItem,folder,[[UIBarButtonItem alloc] initWithCustomView:import]];
     _finder=[[UISearchController alloc] initWithSearchResultsController:nil];_finder.obscuresBackgroundDuringPresentation=NO;
     _finder.searchResultsUpdater=self;_finder.searchBar.placeholder=@"\u0646\u0635\u060c \u0645\u0644\u0627\u062d\u0638\u0629\u060c \u0642\u0633\u0645 \u0623\u0648 \u0646\u0648\u0639";
     self.navigationItem.searchController=_finder; self.navigationItem.hidesSearchBarWhenScrolling=NO;self.definesPresentationContext=YES;
     _meta=[[NSUserDefaults.standardUserDefaults dictionaryForKey:@"MaxKeys.archive"] mutableCopy]?:[NSMutableDictionary new];
     _labels=[NSMutableDictionary new];_times=[NSMutableDictionary new];
     [self loadFiles];
-}
--(void)chooseFolder {
-    UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
-    picker.delegate=self;[self presentViewController:picker animated:YES completion:nil];
-}
--(void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *url=urls.firstObject;
-    NSData *bookmark=nil;
-    if([url startAccessingSecurityScopedResource]){
-        bookmark=[url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
-        [url stopAccessingSecurityScopedResource];
-    }
-    if(bookmark && setFolder(url)){
-        [NSUserDefaults.standardUserDefaults setObject:bookmark forKey:@"MaxKeys.folder"];[self loadFiles];return;
-    }
-    UIAlertController *a=[UIAlertController alertControllerWithTitle:@"تعذّر فتح المجلد" message:@"اختر مجلداً قابلاً للكتابة من «على الـ iPhone»." preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"تم" style:UIAlertActionStyleDefault handler:nil]];[self presentViewController:a animated:YES completion:nil];
 }
 -(void)loadFiles {
     NSMutableArray *items=[NSMutableArray new];
@@ -125,17 +103,6 @@ static void saveValues(NSArray *items) {
         NSDate *date=nil;[u getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];_times[u]=date?:NSDate.distantPast;[items addObject:u];
     }
     _files=[items sortedArrayUsingComparator:^NSComparisonResult(NSURL *a,NSURL *b){return [self.times[b] compare:self.times[a]];}];[self refresh];
-}
--(void)pasteItemProviders:(NSArray<NSItemProvider *> *)providers {
- for(NSItemProvider *p in providers){
-    Class cls=[p canLoadObjectOfClass:UIImage.class]?UIImage.class:([p canLoadObjectOfClass:NSURL.class]?NSURL.class:NSString.class);
-    [p loadObjectOfClass:cls completionHandler:^(id<NSItemProviderReading> object,NSError *error){
-      if(error||!object)return;
-      if([(id)object isKindOfClass:UIImage.class])record(UIImagePNGRepresentation((UIImage *)object),@"png");
-      else {NSString *t=[(id)object isKindOfClass:NSURL.class]?[(NSURL *)object absoluteString]:(NSString *)object;record([t dataUsingEncoding:NSUTF8StringEncoding],@"txt");}
-      dispatch_async(dispatch_get_main_queue(),^{[self loadFiles];});
-    }];
- }
 }
 -(void)emptyTrash {
  if(_tabs.selectedSegmentIndex!=2)return;
@@ -210,22 +177,7 @@ static void saveValues(NSArray *items) {
     UISwipeActionsConfiguration *actions=[UISwipeActionsConfiguration configurationWithActions:trash?@[restore,del]:@[del,fav,edit]]; actions.performsFirstActionWithFullSwipe=NO;return actions;
 }
 @end
-static NSMutableDictionary *credential(NSString *provider) {
-    return [@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
-              (__bridge id)kSecAttrService:@"com.maxfilp.maxkeys.ai",
-              (__bridge id)kSecAttrAccount:provider} mutableCopy];
-}
-static NSString *apiKey(NSString *provider) {
-    NSMutableDictionary *query=credential(provider);
-    query[(__bridge id)kSecReturnData]=@YES;
-    CFTypeRef result=NULL;
-    if (SecItemCopyMatching((__bridge CFDictionaryRef)query,&result)!=errSecSuccess) return nil;
-    return [[NSString alloc] initWithData:CFBridgingRelease(result) encoding:NSUTF8StringEncoding];
-}
 @interface MKBar : UIView
-@property(nonatomic,strong) UIStackView *panel;
-@property(nonatomic,strong) NSURLSessionDataTask *request;
-@property(nonatomic) NSUInteger generation;
 
 @property(nonatomic,weak) UIView<UITextInput> *editor;
 @property(nonatomic,strong) UIStackView *rows;
@@ -241,126 +193,6 @@ static UIButton *button(NSString *s,void (^action)(void)) {
     return b;
 }
 @implementation MKBar
--(UIViewController *)presenter {
-    UIViewController *vc=self.editor.window.rootViewController;
-    while(vc.presentedViewController) vc=vc.presentedViewController;
-    return vc;
-}
--(void)configure:(NSString *)provider {
-    UIAlertController *a=[UIAlertController alertControllerWithTitle:provider message:@"إعدادات MaxKeys لهذا التطبيق. أدخل مفتاحك، أو امسحه لحذفه." preferredStyle:UIAlertControllerStyleAlert];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.secureTextEntry=YES; f.autocapitalizationType=UITextAutocapitalizationTypeNone; f.placeholder=@"API Key"; f.text=apiKey(provider);}];
-    [a addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
-    [a addAction:[UIAlertAction actionWithTitle:@"حفظ" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){
-        NSString *key=[a.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        NSMutableDictionary *q=credential(provider);
-        OSStatus status;
-        if(key.length){
-            NSDictionary *attrs=@{(__bridge id)kSecValueData:[key dataUsingEncoding:NSUTF8StringEncoding],(__bridge id)kSecAttrAccessible:(__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly};
-            status=SecItemUpdate((__bridge CFDictionaryRef)q,(__bridge CFDictionaryRef)attrs);
-            if(status==errSecItemNotFound){[q addEntriesFromDictionary:attrs]; status=SecItemAdd((__bridge CFDictionaryRef)q,NULL);}
-        } else {status=SecItemDelete((__bridge CFDictionaryRef)q); if(status==errSecItemNotFound)status=errSecSuccess;}
-        if(status==errSecSuccess) [NSUserDefaults.standardUserDefaults setObject:provider forKey:@"MaxKeys.provider"];
-        else [self display:@"تعذّر حفظ المفتاح في سلسلة المفاتيح." output:nil source:nil replace:NO];
-    }]];
-    [[self presenter] presentViewController:a animated:YES completion:nil];
-}
--(void)resizePanel {
-    CGRect frame=self.frame; frame.size.height=_panel?164:44; self.frame=frame;
-    [self invalidateIntrinsicContentSize]; [self setNeedsLayout]; [_editor reloadInputViews];
-}
--(CGSize)intrinsicContentSize { return CGSizeMake(UIViewNoIntrinsicMetric,_panel?164:44); }
--(void)hidePanel {
-    _generation++; [_request cancel]; _request=nil; [_panel removeFromSuperview]; _panel=nil; [self resizePanel];
-}
--(void)display:(NSString *)message output:(NSString *)result source:(NSString *)source replace:(BOOL)replace {
-    [_panel removeFromSuperview]; _panel=[UIStackView new]; _panel.axis=UILayoutConstraintAxisVertical; [self addSubview:_panel];
-    UITextView *preview=[UITextView new]; preview.editable=NO; preview.selectable=NO;
-    preview.backgroundColor=UIColor.secondarySystemBackgroundColor; preview.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody]; preview.text=message;
-    [_panel addArrangedSubview:preview];
-    UIStackView *actions=[UIStackView new]; actions.distribution=UIStackViewDistributionFillEqually;
-    [_panel addArrangedSubview:actions]; [actions.heightAnchor constraintEqualToConstant:38].active=YES;
-    __weak MKBar *weak=self;
-    NSArray *titles=result?@[replace?@"استبدال المحدد":@"إدراج",@"نسخ",@"إغلاق"]:@[@"إغلاق"];
-    for(NSString *title in titles){
-        UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:title forState:UIControlStateNormal];
-        [b addAction:[UIAction actionWithHandler:^(UIAction *act){
-            MKBar *bar=weak; if(!bar)return;
-            if([title isEqual:@"نسخ"]){UIPasteboard.generalPasteboard.string=result; return;}
-            if(![title isEqual:@"إغلاق"]){
-                UIView<UITextInput> *editor=bar.editor;
-                if(!editor.isFirstResponder)return;
-                UITextRange *range=editor.selectedTextRange;
-                if(replace && (!range || ![[editor textInRange:range] isEqual:source])){
-                    [bar display:@"تغيّر التحديد. تگدر تنسخ النتيجة أو تدرجها عند المؤشر." output:result source:nil replace:NO]; return;
-                }
-                [editor insertText:result];
-            }
-            [bar hidePanel];
-        }] forControlEvents:UIControlEventTouchUpInside]; [actions addArrangedSubview:b];
-    }
-    [self resizePanel];
-}
--(void)runAI:(NSString *)instruction source:(NSString *)source replace:(BOOL)replace {
-    if(!source.length){
-        UIAlertController *entry=[UIAlertController alertControllerWithTitle:@"النص المراد إرساله" message:@"اكتب النص أو الصقه ثم اضغط إرسال." preferredStyle:UIAlertControllerStyleAlert];
-        [entry addTextFieldWithConfigurationHandler:nil];
-        [entry addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
-        [entry addAction:[UIAlertAction actionWithTitle:@"إرسال" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){NSString *text=entry.textFields.firstObject.text;if(text.length)[self runAI:instruction source:text replace:NO];}]];
-        [[self presenter] presentViewController:entry animated:YES completion:nil];return;
-    }
-    NSString *provider=[NSUserDefaults.standardUserDefaults stringForKey:@"MaxKeys.provider"]?:@"OpenAI";
-    NSString *key=apiKey(provider); if(!key.length){[self configure:provider];return;}
-    BOOL google=[provider isEqual:@"Gemini"];
-    NSURL *url=[NSURL URLWithString:google?@"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions":@"https://api.openai.com/v1/chat/completions"];
-    NSMutableURLRequest *req=[NSMutableURLRequest requestWithURL:url];req.HTTPMethod=@"POST";req.timeoutInterval=55;
-    [req setValue:[@"Bearer " stringByAppendingString:key] forHTTPHeaderField:@"Authorization"];
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    req.HTTPBody=[NSJSONSerialization dataWithJSONObject:@{@"model":google?@"gemini-2.5-flash":@"gpt-4.1-mini",@"messages":@[@{@"role":@"system",@"content":instruction},@{@"role":@"user",@"content":source}]} options:0 error:nil];
-    [_request cancel]; NSUInteger generation=++_generation;
-    [self display:@"جاري تحضير النتيجة…" output:nil source:nil replace:NO];
-    __weak MKBar *weak=self;
-    _request=[NSURLSession.sharedSession dataTaskWithRequest:req completionHandler:^(NSData *data,NSURLResponse *response,NSError *err){
-        NSInteger status=[(NSHTTPURLResponse *)response statusCode];
-        NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-        NSString *answer=nil;
-        if([json isKindOfClass:NSDictionary.class] && status==200) answer=[json[@"choices"] firstObject][@"message"][@"content"];
-        if(![answer isKindOfClass:NSString.class]||!answer.length) answer=nil;
-        NSString *message=answer?:((status==401||status==403)?@"راجع مفتاح API وصلاحياته.":status==429?@"بلغت حد الطلبات أو الرصيد لدى المزوّد.":@"تعذّر الحصول على نتيجة. تحقق من الاتصال وإعدادات المزوّد.");
-        if(!answer){
-            NSString *code=[json isKindOfClass:NSDictionary.class] && [json[@"error"] isKindOfClass:NSDictionary.class] ? [json[@"error"][@"code"] description] : nil;
-            message=[NSString stringWithFormat:@"%@ · %@ %ld %@\n%@",provider,err?@"Network":@"HTTP",(long)(err?err.code:status),code?:@"",message];
-        }
-        dispatch_async(dispatch_get_main_queue(),^{MKBar *bar=weak;if(bar && bar.generation==generation)[bar display:message output:answer source:source replace:replace];});
-    }]; [_request resume];
-}
--(UIButton *)aiButton:(BOOL)translation {
-    UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem]; b.accessibilityLabel=translation?@"ترجمة":@"المساعد الذكي";
-    [b setImage:[UIImage systemImageNamed:translation?@"globe":@"sparkles"] forState:UIControlStateNormal];
-    __weak MKBar *weak=self;
-    NSMutableArray *items=[NSMutableArray new]; NSMutableArray *settings=[NSMutableArray new];
-    for(NSString *provider in @[@"OpenAI",@"Gemini"])[settings addObject:[UIAction actionWithTitle:provider image:nil identifier:nil handler:^(UIAction *a){[weak configure:provider];}]];
-    NSArray *options=translation?@[@"الإنجليزية",@"العربية",@"الفرنسية",@"التركية"]:@[@"رد باللهجة العراقية",@"تصحيح الكتابة",@"صياغة رسمية",@"طلب خاص"];
-    for(NSString *option in options){
-        UIAction *action=[UIAction actionWithTitle:option image:nil identifier:nil handler:^(UIAction *a){
-            MKBar *bar=weak; UIView<UITextInput> *editor=bar.editor; UITextRange *range=editor.selectedTextRange;
-            NSString *source=range?[editor textInRange:range]:nil;
-            if([option isEqual:@"طلب خاص"]){
-                UIAlertController *dlg=[UIAlertController alertControllerWithTitle:option message:@"اكتب طلبك للمساعد" preferredStyle:UIAlertControllerStyleAlert];
-                [dlg addTextFieldWithConfigurationHandler:nil];[dlg addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
-                [dlg addAction:[UIAlertAction actionWithTitle:@"إرسال" style:UIAlertActionStyleDefault handler:^(UIAlertAction *send){NSString *prompt=dlg.textFields.firstObject.text;if(prompt.length)[bar runAI:prompt source:source.length?source:prompt replace:NO];}]];
-                [[bar presenter] presentViewController:dlg animated:YES completion:nil];return;
-            }
-            if(translation)[NSUserDefaults.standardUserDefaults setObject:option forKey:@"MaxKeys.language"];
-            NSString *instruction=translation?[@"ترجم النص فقط إلى " stringByAppendingString:option]:[option stringByAppendingString:@" للنص المرفق. أعد النتيجة فقط."];
-            [bar runAI:instruction source:source replace:translation];
-        }];
-        [items addObject:action];
-    }
-    if(translation){NSString *saved=[NSUserDefaults.standardUserDefaults stringForKey:@"MaxKeys.language"];for(UIAction *action in items)if([action.title isEqual:saved])action.state=UIMenuElementStateOn;}
-    [items addObject:[UIMenu menuWithTitle:@"إعدادات المزوّد والمفتاح" children:settings]];
-    b.menu=[UIMenu menuWithTitle:@"يُرسل النص عند اختيار العملية" children:items]; b.showsMenuAsPrimaryAction=YES;
-    return b;
-}
 -(UIStackView *)row {
     UIStackView *r=[UIStackView new]; r.distribution=UIStackViewDistributionFillEqually;
     r.semanticContentAttribute=UISemanticContentAttributeForceLeftToRight;
@@ -373,7 +205,6 @@ static UIButton *button(NSString *s,void (^action)(void)) {
     
     __weak MKBar *w=self;
     UIStackView *r=[self row];
-    [r addArrangedSubview:[self aiButton:YES]]; [r addArrangedSubview:[self aiButton:NO]];
     [r addArrangedSubview:button(@"طيّ الكيبورد",^{[w.editor resignFirstResponder];})];
     for(NSString *s in @[@"\u21b6",@"\u21b7",@"\u062a\u062d\u062f\u064a\u062f",@"\u2190",@"\u2192"]) {
         [r addArrangedSubview:button(s,^{
@@ -392,7 +223,7 @@ static UIButton *button(NSString *s,void (^action)(void)) {
         if([s isEqual:@"\u0627\u0644\u062d\u0627\u0641\u0638\u0629"]) [w showShelf]; else [w snippet:s];
     })];
 }
--(void)layoutSubviews { [super layoutSubviews]; CGFloat height=CGRectGetHeight(self.bounds); _rows.frame=CGRectMake(0,height-44,self.bounds.size.width,44); _panel.frame=CGRectMake(8,0,self.bounds.size.width-16,MAX(0,height-44));
+-(void)layoutSubviews { [super layoutSubviews]; CGFloat height=CGRectGetHeight(self.bounds); _rows.frame=CGRectMake(0,height-44,self.bounds.size.width,44);
 }
 -(void)snippet:(NSString *)name {
     NSString *key=[@"MaxKeys." stringByAppendingString:name];
@@ -438,3 +269,11 @@ static UIView *accessory(UIView<UITextInput> *e,UIView *orig){
 %hook UITextView
 -(UIView *)inputAccessoryView { return accessory(self,%orig); }
 %end
+
+%ctor {
+    @autoreleasepool {
+        if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
+            %init;
+        }
+    }
+}
