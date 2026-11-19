@@ -1,0 +1,9 @@
+Package: com.maxfilp.maxkeys
+Name: MaxKeys
+Version: 0.3.1
+Architecture: iphoneos-arm64
+Description: Arabic keyboard editing toolbar and local clipboard shelf.
+Maintainer: Max Filp
+Author: Max Filp
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 16.0)

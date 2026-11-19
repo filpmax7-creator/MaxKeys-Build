@@ -1,0 +1,37 @@
+name: Build MaxKeys
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'MaxKeys/**'
+      - '.github/workflows/maxkeys.yml'
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: MaxKeys
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: beerpiss/theos-action@v1.7.0
+      - name: Build rootless package
+        run: make package FINALPACKAGE=1
+      - name: Verify package
+        shell: bash
+        run: |
+          command -v dpkg-deb >/dev/null || brew install dpkg
+          shopt -s nullglob
+          packages=(packages/*.deb)
+          test "${#packages[@]}" -eq 1
+          test "$(dpkg-deb -f "${packages[0]}" Architecture)" = iphoneos-arm64
+          test "$(dpkg-deb -f "${packages[0]}" Package)" = com.maxfilp.maxkeys
+          test "$(dpkg-deb -f "${packages[0]}" Version)" = "$(sed -n 's/^Version: //p' control)"
+          dpkg-deb -c "${packages[0]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaxKeys-rootless
+          path: MaxKeys/packages/*.deb
+          if-no-files-found: error
