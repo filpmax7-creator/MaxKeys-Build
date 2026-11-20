@@ -40,6 +40,7 @@ static void refreshViews(UIView *view) {
     if ([view isKindOfClass:UILabel.class] || [view isKindOfClass:UITextView.class]) [view setNeedsLayout];
     for (UIView *child in view.subviews) refreshViews(child);
 }
+static void showIncomingReport(UIViewController *vc);
 static void installMenu(UIViewController *vc) {
     NSString *chat=chatID(vc);
     if (!chat || !vc.navigationController) return;
@@ -70,6 +71,9 @@ static void installMenu(UIViewController *vc) {
             [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:chat]];
         installMenu(weakVC);
         refreshViews(weakVC.view);
+    }]];
+    [groups addObject:[UIAction actionWithTitle:@"فحص ترجمة الوارد" image:nil identifier:nil handler:^(__unused UIAction *sender){
+        showIncomingReport(weakVC);
     }]];
     UIMenu *menu=[UIMenu menuWithTitle:@"ترجمة المحادثة عبر Google" children:groups];
     if (!button) {
@@ -136,14 +140,21 @@ static NSString *visibleChat(UIView *v) {
     return nil;
 }
 
+static NSNumber *deliveryDirection(id owner) {
+    for (NSString *key in @[@"isFromMe",@"fromMe",@"isOutgoing",@"outgoing",@"isIncoming"]) {
+        id flag=property(owner,key);
+        if ([flag isKindOfClass:NSNumber.class]) return [key isEqual:@"isIncoming"] ? @(![flag boolValue]) : flag;
+    }
+    return nil;
+}
 static id messageIn(id owner) {
     for (id holder in @[owner ?: NSNull.null, property(owner,@"cellData") ?: NSNull.null,
-                         property(owner,@"viewModel") ?: NSNull.null, property(owner,@"messageData") ?: NSNull.null]) {
+                         property(owner,@"viewModel") ?: NSNull.null, property(owner,@"messageData") ?: NSNull.null, property(owner,@"messageViewModel") ?: NSNull.null]) {
         for (NSString *key in @[@"message",@"waMessage",@"messageObject"]) {
             id model=property(holder,key);
-            if ([model respondsToSelector:NSSelectorFromString(@"isFromMe")]) return model;
+            if (deliveryDirection(model)) return model;
         }
-        if ([holder respondsToSelector:NSSelectorFromString(@"isFromMe")]) return holder;
+        if (deliveryDirection(holder)) return holder;
     }
     return nil;
 }
@@ -177,7 +188,30 @@ static id modelForView(UIView *view) {
     return nil;
 }
 static NSString *plain(NSString *s) {
-    return [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    static NSCharacterSet *marks;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ marks=[NSCharacterSet characterSetWithCharactersInString:@"\u200e\u200f\u061c\u2066\u2067\u2068\u2069"]; });
+    NSString *clean=[[s componentsSeparatedByCharactersInSet:marks] componentsJoinedByString:@""];
+    return [clean stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+static void inspectVisible(UIView *v, NSMutableOrderedSet *classes, NSUInteger *cells, NSUInteger *models) {
+    if (v.hidden || !v.window || v.alpha < 0.01) return;
+    if (!CGRectIntersectsRect([v convertRect:v.bounds toView:v.window],v.window.bounds)) return;
+    NSString *name=NSStringFromClass(v.class);
+    if ([v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class]) {
+        (*cells)++;
+        if (modelForView(v)) (*models)++;
+        [classes addObject:name];
+    } else if (([name localizedCaseInsensitiveContainsString:@"message"] || [name localizedCaseInsensitiveContainsString:@"text"]) && classes.count<14)
+        [classes addObject:name];
+    for (UIView *child in v.subviews) inspectVisible(child,classes,cells,models);
+}
+static void showIncomingReport(UIViewController *vc) {
+    NSUInteger cells=0, models=0;
+    NSMutableOrderedSet *classes=[NSMutableOrderedSet new];
+    inspectVisible(vc.view,classes,&cells,&models);
+    NSString *target=incomingLanguage(chatID(vc)) ?: @"—";
+    note(vc,[NSString stringWithFormat:@"اللغة: %@ · الخلايا: %lu · النماذج: %lu\n%@",target,(unsigned long)cells,(unsigned long)models,[classes.array componentsJoinedByString:@"\n"]]);
 }
 static void translateView(UIView *view) {
     if (!view.window) return;
@@ -198,7 +232,7 @@ static void translateView(UIView *view) {
     }
     if (!target) return;
     id model=modelForView(view);
-    NSNumber *outgoing=property(model,@"isFromMe");
+    NSNumber *outgoing=deliveryDirection(model);
     if (![outgoing isKindOfClass:NSNumber.class] || outgoing.boolValue) return;
     id body=property(model,@"text") ?: property(model,@"messageText");
     if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
@@ -212,7 +246,15 @@ static void translateView(UIView *view) {
         if (!v || ![objc_getAssociatedObject(v,&originalText) isEqual:key]) return;
         UILabel *l=label ? (UILabel *)v : nil;
         UITextView *t=label ? nil : (UITextView *)v;
-        if (!result.length || [plain(result) isEqual:plain(display)]) return;
+        if (!result.length) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+                UIView *retry=weak;
+                if (retry && [objc_getAssociatedObject(retry,&originalText) isEqual:key])
+                    objc_setAssociatedObject(retry,&originalText,nil,OBJC_ASSOCIATION_ASSIGN);
+            });
+            return;
+        }
+        if ([plain(result) isEqual:plain(display)]) return;
         objc_setAssociatedObject(v,&originalText,nil,OBJC_ASSOCIATION_ASSIGN);
         if (!v.window || ![visibleChat(v) isEqual:chat] || ![incomingLanguage(chat) isEqual:target] || ![(label ? l.text : t.text) isEqual:display]) return;
         NSMutableAttributedString *content=[(label ? l.attributedText : t.attributedText) mutableCopy];

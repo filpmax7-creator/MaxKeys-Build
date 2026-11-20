@@ -25,7 +25,7 @@
     [self translate:draft target:target completion:completion];
 }
 - (void)translateIncoming:(NSString *)text target:(NSString *)target completion:(void (^)(NSString *))completion {
-    if (!text.length || [[NLLanguageRecognizer dominantLanguageForString:text] isEqual:target]) { completion(nil); return; }
+    if (!text.length || !target.length) { completion(nil); return; }
     [self translate:text target:target completion:completion];
 }
 - (void)translate:(NSString *)text target:(NSString *)target completion:(void (^)(NSString *))completion {
