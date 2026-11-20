@@ -102,42 +102,100 @@ static UITextView *activeEditor(UIView *root) {
 }
 %end
 
-// Match the rendered message to its model before requesting or presenting a translation.
-static void translateLabel(UILabel *label) {
-    UIView *cell=label.superview;
-    while (cell && ![cell isKindOfClass:UITableViewCell.class] && ![cell isKindOfClass:UICollectionViewCell.class]) cell=cell.superview;
-    if (!cell) return;
-    id model=property(cell,@"message") ?: property(property(cell,@"cellData"),@"message");
+static NSString *visibleChat(UIView *v) {
+    for (UIResponder *r=v; r; r=r.nextResponder) {
+        if (![r isKindOfClass:UIViewController.class]) continue;
+        NSString *chat=chatID((UIViewController *)r);
+        if (chat.length) return chat;
+    }
+    return nil;
+}
+
+static id messageIn(id owner) {
+    for (id holder in @[owner ?: NSNull.null, property(owner,@"cellData") ?: NSNull.null,
+                         property(owner,@"viewModel") ?: NSNull.null, property(owner,@"messageData") ?: NSNull.null]) {
+        for (NSString *key in @[@"message",@"waMessage",@"messageObject"]) {
+            id model=property(holder,key);
+            if ([model respondsToSelector:NSSelectorFromString(@"isFromMe")]) return model;
+        }
+        if ([holder respondsToSelector:NSSelectorFromString(@"isFromMe")]) return holder;
+    }
+    return nil;
+}
+
+static id modelForView(UIView *view) {
+    for (UIView *v=view; v; v=v.superview) {
+        if ([v isKindOfClass:UITableView.class] || [v isKindOfClass:UICollectionView.class]) break;
+        id model=messageIn(v);
+        if (model) return model;
+        if (![v isKindOfClass:UITableViewCell.class] && ![v isKindOfClass:UICollectionViewCell.class]) continue;
+        UIView *list=v.superview;
+        while(list && ![list isKindOfClass:UITableView.class] && ![list isKindOfClass:UICollectionView.class]) list=list.superview;
+        NSIndexPath *path=nil;
+        if ([v isKindOfClass:UITableViewCell.class] && [list isKindOfClass:UITableView.class])
+            path=[(UITableView *)list indexPathForCell:(UITableViewCell *)v];
+        if ([v isKindOfClass:UICollectionViewCell.class] && [list isKindOfClass:UICollectionView.class])
+            path=[(UICollectionView *)list indexPathForCell:(UICollectionViewCell *)v];
+        id source=property(list,@"dataSource");
+        if (path) for (id provider in @[source ?: NSNull.null,controller(v) ?: NSNull.null]) {
+            for (NSString *key in @[@"messageAtIndexPath:",@"messageForIndexPath:"]) {
+                SEL sel=NSSelectorFromString(key);
+                NSMethodSignature *sig=[provider methodSignatureForSelector:sel];
+                if (sig.numberOfArguments!=3 || sig.methodReturnType[0]!='@' || [sig getArgumentTypeAtIndex:2][0]!='@') continue;
+                id (*get)(id,SEL,id)=(id (*)(id,SEL,id))[provider methodForSelector:sel];
+                id found=messageIn(get(provider,sel,path));
+                if(found) return found;
+            }
+        }
+        break;
+    }
+    return nil;
+}
+static NSString *plain(NSString *s) {
+    return [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+static void translateView(UIView *view) {
+    if (!view.window) return;
+    BOOL label=[view isKindOfClass:UILabel.class];
+    UITextView *tv=label ? nil : (UITextView *)view;
+    if (tv && tv.editable) return;
+    NSString *display=label ? ((UILabel *)view).text : tv.text;
+    if (!display.length || [display isEqual:objc_getAssociatedObject(view,&translatedText)]) return;
+    NSString *chat=visibleChat(view);
+    if (!setting(chat)) return;
+    id model=modelForView(view);
     NSNumber *outgoing=property(model,@"isFromMe");
-    NSString *text=property(model,@"text");
-    NSString *chat=chatID(controller(cell));
-    if (!setting(chat) || ![outgoing isKindOfClass:NSNumber.class] || outgoing.boolValue || ![text isKindOfClass:NSString.class] || !text.length) return;
-    if (![label.text isEqual:text] || [objc_getAssociatedObject(label,&originalText) isEqual:text]) return;
-    objc_setAssociatedObject(label,&originalText,text,OBJC_ASSOCIATION_COPY_NONATOMIC);
-    __weak UILabel *weakLabel=label;
-    [engine translateIncoming:text completion:^(NSString *result){
-        UILabel *current=weakLabel;
-        if (!current.window || ![current.text isEqual:text] || ![chatID(controller(current)) isEqual:chat] || !setting(chat)) return;
-        if (!result.length || [result isEqual:text]) return;
-        NSString *display=[NSString stringWithFormat:@"%@\n%@",text,result];
-        objc_setAssociatedObject(current,&translatedText,display,OBJC_ASSOCIATION_COPY_NONATOMIC);
-        current.numberOfLines=0;
-        current.text=display;
-        [current invalidateIntrinsicContentSize];
+    if (![outgoing isKindOfClass:NSNumber.class] || outgoing.boolValue) return;
+    id body=property(model,@"text") ?: property(model,@"messageText");
+    if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
+    if (![body isKindOfClass:NSString.class] || ![plain(display) isEqual:plain(body)]) return;
+    NSArray *key=@[chat,display];
+    if ([objc_getAssociatedObject(view,&originalText) isEqual:key]) return;
+    objc_setAssociatedObject(view,&originalText,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weak=view;
+    [engine translateIncoming:body completion:^(NSString *result){
+        UIView *v=weak;
+        if (!v || ![objc_getAssociatedObject(v,&originalText) isEqual:key]) return;
+        UILabel *l=label ? (UILabel *)v : nil;
+        UITextView *t=label ? nil : (UITextView *)v;
+        if (!result.length || [plain(result) isEqual:plain(display)]) return;
+        objc_setAssociatedObject(v,&originalText,nil,OBJC_ASSOCIATION_ASSIGN);
+        if (!v.window || ![visibleChat(v) isEqual:chat] || !setting(chat) || ![(label ? l.text : t.text) isEqual:display]) return;
+        NSMutableAttributedString *content=[(label ? l.attributedText : t.attributedText) mutableCopy];
+        if(!content.length) content=[[NSMutableAttributedString alloc] initWithString:display];
+        NSDictionary *style=@{NSFontAttributeName:(label ? l.font : t.font) ?: [UIFont preferredFontForTextStyle:UIFontTextStyleBody],
+                              NSForegroundColorAttributeName:(label ? l.textColor : t.textColor) ?: UIColor.labelColor};
+        [content appendAttributedString:[[NSAttributedString alloc] initWithString:[@"\n" stringByAppendingString:result] attributes:style]];
+        objc_setAssociatedObject(v,&translatedText,content.string,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        if(label) { l.numberOfLines=0; l.attributedText=content; } else { t.attributedText=content; }
+        [v invalidateIntrinsicContentSize];
     }];
 }
 %hook UILabel
-- (void)layoutSubviews {
-    %orig;
-    if (self.window && self.text.length) translateLabel(self);
-}
-- (void)setText:(NSString *)text {
-    if (![objc_getAssociatedObject(self,&translatedText) isEqual:text]) {
-        objc_setAssociatedObject(self,&originalText,nil,OBJC_ASSOCIATION_ASSIGN);
-        objc_setAssociatedObject(self,&translatedText,nil,OBJC_ASSOCIATION_ASSIGN);
-    }
-    %orig;
-}
+- (void)layoutSubviews { %orig; translateView(self); }
+%end
+%hook UITextView
+- (void)layoutSubviews { %orig; translateView(self); }
 %end
 %ctor {
     if ([NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
