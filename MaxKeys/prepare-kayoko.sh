@@ -30,6 +30,19 @@ for directory in ("Core", "Helper", "Shared"):
             updated = original.replace("<roothide.h>", '"MaxKeysRootlessPath.h"')
             if original != updated:
                 source.write_text(updated)
+repository = next(root.rglob("KayokoHistoryRepository.m"))
+source = repository.read_text()
+check = "if (![historyStore validateSearchIndexWithError:&prepareError])"
+assert source.count(check) == 1
+repository.write_text(source.replace(check, "if (![historyStore upgradeSearchIndexWithError:&prepareError] || ![historyStore validateSearchIndexWithError:&prepareError])"))
+header = next(root.rglob("KayokoHeaderView.m"))
+source = header.read_text()
+start = source.index("NSString *clipboardTitle =")
+end = source.index("_historySegmentedControl =", start)
+header.write_text(source[:start] + '''NSString *clipboardTitle = [bundle localizedStringForKey:@"Clipboard" value:@"الحافظة" table:@"Tweak"] ?: @"الحافظة";
+        NSString *favoritesTitle = [bundle localizedStringForKey:@"Favorites" value:@"المفضلة" table:@"Tweak"] ?: @"المفضلة";
+
+        ''' + source[end:])
 # Keep the list available for successive selections; the panel retains its own close control.
 history = next(root.rglob("KayokoHistoryListViewController.m"))
 source = history.read_text()
@@ -43,7 +56,17 @@ core.write_text(core.read_text().replace("[KayokoPasteTipHookInstaller installHo
 (root / "KayokoCore.plist").write_text('{ Filter = { Bundles = ( "com.apple.springboard" ); }; }\n')
 PY
 resources=layout/Library/PreferenceBundles/KayokoPreferences.bundle
-mkdir -p "$resources"
+mkdir -p "$resources/ar.lproj"
+cp Arabic/*.strings "$resources/ar.lproj/"
+for table in "$resources/ar.lproj/"*.strings; do plutil -lint "$table"; done
+cat > "$resources/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.maxfilp.maxkeys.clipboard.resources</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundlePackageType</key><string>BNDL</string>
+</dict></plist>
+PLIST
 cp -R "$upstream/Preferences/Resources/en.lproj" "$upstream/Preferences/Resources/zh-Hans.lproj" "$resources/"
 cp "$upstream"/Preferences/Resources/*.aiff "$upstream"/Preferences/Resources/*.png "$resources/"
 mkdir -p layout/usr/share/doc/com.maxfilp.maxkeys
