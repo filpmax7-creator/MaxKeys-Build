@@ -1,0 +1,33 @@
+name: Build MaxWhatsTranslate
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'MaxWhatsTranslate/**'
+      - '.github/workflows/maxwhatstranslate.yml'
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: MaxWhatsTranslate
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: beerpiss/theos-action@v1.7.0
+      - name: Build and verify deb
+        shell: bash
+        run: |
+          make package FINALPACKAGE=1
+          packages=(packages/*.deb)
+          test "${#packages[@]}" -eq 1
+          test "$(dpkg-deb -f "${packages[0]}" Package)" = com.maxfilp.maxwhatstranslate
+          test "$(dpkg-deb -f "${packages[0]}" Architecture)" = iphoneos-arm64
+          dpkg-deb -c "${packages[0]}" | grep 'MaxWhatsTranslate.dylib'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaxWhatsTranslate-rootless
+          path: MaxWhatsTranslate/packages/*.deb
+          if-no-files-found: error
