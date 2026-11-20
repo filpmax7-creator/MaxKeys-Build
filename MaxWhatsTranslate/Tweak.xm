@@ -37,7 +37,7 @@ static NSString *incomingLanguage(NSString *chat) {
     return [NSUserDefaults.standardUserDefaults stringForKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:chat]] ?: (setting(chat) ? @"ar" : nil);
 }
 static void refreshViews(UIView *view) {
-    if ([view isKindOfClass:UILabel.class] || [view isKindOfClass:UITextView.class]) [view setNeedsLayout];
+    if ([view isKindOfClass:UILabel.class] || [view isKindOfClass:UITextView.class] || [view isKindOfClass:NSClassFromString(@"WAMessageAttributedTextSliceView")]) [view setNeedsLayout];
     for (UIView *child in view.subviews) refreshViews(child);
 }
 static void showIncomingReport(UIViewController *vc);
@@ -274,9 +274,78 @@ static void translateView(UIView *view) {
 %hook UITextView
 - (void)layoutSubviews { %orig; translateView(self); }
 %end
+
+// WhatsApp draws this text slice itself. Give its translation a separate view.
+static char sliceRequest, sliceButton;
+static NSArray *sliceIdentity(UIView *slice) {
+    if (!slice.window) return nil;
+    NSString *chat=visibleChat(slice);
+    NSString *language=incomingLanguage(chat);
+    if (!language.length) return nil;
+    id model=modelForView(slice);
+    NSNumber *direction=deliveryDirection(model);
+    if (!direction || direction.boolValue) return nil;
+    id body=property(model,@"text") ?: property(model,@"messageText");
+    if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
+    if (![body isKindOfClass:NSString.class] || ![body length]) return nil;
+    return @[chat,language,body];
+}
+
+static void updateSlice(UIView *slice) {
+    NSArray *key=sliceIdentity(slice);
+    UIButton *old=objc_getAssociatedObject(slice,&sliceButton);
+    if ([key isEqual:objc_getAssociatedObject(slice,&sliceRequest)]) {
+        if (old && old.superview==slice) [slice bringSubviewToFront:old];
+        return;
+    }
+    [old removeFromSuperview];
+    objc_setAssociatedObject(slice,&sliceButton,nil,OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(slice,&sliceRequest,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!key) return;
+    __weak UIView *weak=slice;
+    [engine translateIncoming:key[2] target:key[1] completion:^(NSString *result) {
+        UIView *current=weak;
+        if (!current || ![objc_getAssociatedObject(current,&sliceRequest) isEqual:key] || ![sliceIdentity(current) isEqual:key]) return;
+        if (!result.length) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,30*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+                UIView *v=weak;
+                if ([objc_getAssociatedObject(v,&sliceRequest) isEqual:key]) objc_setAssociatedObject(v,&sliceRequest,nil,OBJC_ASSOCIATION_ASSIGN);
+            });
+            return;
+        }
+        if ([plain(result) isEqual:plain(key[2])]) return;
+        UIButton *button=[UIButton buttonWithType:UIButtonTypeCustom];
+        button.frame=current.bounds;
+        button.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        button.backgroundColor=UIColor.secondarySystemBackgroundColor;
+        button.layer.cornerRadius=5;
+        button.clipsToBounds=YES;
+        button.titleLabel.numberOfLines=0;
+        button.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+        button.titleLabel.adjustsFontSizeToFitWidth=YES;
+        button.titleLabel.minimumScaleFactor=0.8;
+        [button setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+        [button setTitle:result forState:UIControlStateNormal];
+        button.accessibilityHint=@"عرض الأصل والترجمة كاملة";
+        [button addAction:[UIAction actionWithHandler:^(__unused UIAction *action){
+            UIView *v=weak;
+            if ([sliceIdentity(v) isEqual:key]) note(controller(v),[NSString stringWithFormat:@"%@\n\n%@",key[2],result]);
+        }] forControlEvents:UIControlEventTouchUpInside];
+        objc_setAssociatedObject(current,&sliceButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [current addSubview:button];
+    }];
+}
+
+%group AttributedSlice
+%hook WAMessageAttributedTextSliceView
+- (void)layoutSubviews { %orig; updateSlice((UIView *)self); }
+- (void)didMoveToWindow { %orig; updateSlice((UIView *)self); }
+%end
+%end
 %ctor {
     if ([NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
         engine=[ConversationTranslator new];
         %init;
+        if (NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }
     }
 }
