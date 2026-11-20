@@ -13,10 +13,29 @@ from pathlib import Path
 root = Path("vendor/Kayoko/Core")
 build = root / "Makefile"
 build.write_text(build.read_text().replace("KayokoCore_FILES += KayokoPasteTipHooks.m", ""))
+# This build uses the conventional /var/jb rootless package layout.
+compat = root.parent / "Preferences" / "MaxKeysRootlessPath.h"
+compat.write_text('''#import <Foundation/Foundation.h>
+static inline NSString *jbroot(NSString *path) {
+    if ([path hasPrefix:@"/var/mobile/"]) return path;
+    return [@"/var/jb" stringByAppendingPathComponent:path];
+}
+''')
+for directory in ("Core", "Helper", "Shared"):
+    for source in (root.parent / directory).rglob("*"):
+        if source.suffix in (".m", ".mm", ".h"):
+            original = source.read_text()
+            updated = original.replace("<roothide.h>", '"MaxKeysRootlessPath.h"')
+            if original != updated:
+                source.write_text(updated)
 core = root / "KayokoCore.m"
 core.write_text(core.read_text().replace("[KayokoPasteTipHookInstaller installHooks];", ""))
 (root / "KayokoCore.plist").write_text('{ Filter = { Bundles = ( "com.apple.springboard" ); }; }\n')
 PY
+resources=layout/Library/PreferenceBundles/KayokoPreferences.bundle
+mkdir -p "$resources"
+cp -R "$upstream/Preferences/Resources/en.lproj" "$upstream/Preferences/Resources/zh-Hans.lproj" "$resources/"
+cp "$upstream"/Preferences/Resources/*.aiff "$upstream"/Preferences/Resources/*.png "$resources/"
 mkdir -p layout/usr/share/doc/com.maxfilp.maxkeys
 cp "$upstream/COPYING" layout/usr/share/doc/com.maxfilp.maxkeys/
 printf '%s\n' "Kayoko by Alexandra Aurora Göttlicher and contributors, mlgm66 fork" "https://github.com/mlgm66/Kayoko/commit/$rev" > layout/usr/share/doc/com.maxfilp.maxkeys/upstream
