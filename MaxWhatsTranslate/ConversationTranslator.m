@@ -24,9 +24,9 @@
     NSString *target = [NSUserDefaults.standardUserDefaults stringForKey:[@"MaxWhatsTranslate.target." stringByAppendingString:chat]] ?: @"en";
     [self translate:draft target:target completion:completion];
 }
-- (void)translateIncoming:(NSString *)text completion:(void (^)(NSString *))completion {
-    if (!text.length || [[NLLanguageRecognizer dominantLanguageForString:text] isEqual:@"ar"]) { completion(nil); return; }
-    [self translate:text target:@"ar" completion:completion];
+- (void)translateIncoming:(NSString *)text target:(NSString *)target completion:(void (^)(NSString *))completion {
+    if (!text.length || [[NLLanguageRecognizer dominantLanguageForString:text] isEqual:target]) { completion(nil); return; }
+    [self translate:text target:target completion:completion];
 }
 - (void)translate:(NSString *)text target:(NSString *)target completion:(void (^)(NSString *))completion {
     NSArray *key = @[target, text];

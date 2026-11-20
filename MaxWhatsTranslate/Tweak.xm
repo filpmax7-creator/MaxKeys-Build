@@ -32,27 +32,52 @@ static void note(UIViewController *vc, NSString *text) {
     [a addAction:[UIAlertAction actionWithTitle:@"\u062a\u0645" style:UIAlertActionStyleDefault handler:nil]];
     [vc presentViewController:a animated:YES completion:nil];
 }
+static NSString *incomingLanguage(NSString *chat) {
+    if (!chat) return nil;
+    return [NSUserDefaults.standardUserDefaults stringForKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:chat]] ?: (setting(chat) ? @"ar" : nil);
+}
+static void refreshViews(UIView *view) {
+    if ([view isKindOfClass:UILabel.class] || [view isKindOfClass:UITextView.class]) [view setNeedsLayout];
+    for (UIView *child in view.subviews) refreshViews(child);
+}
 static void installMenu(UIViewController *vc) {
     NSString *chat=chatID(vc);
     if (!chat || !vc.navigationController) return;
-    UIBarButtonItem *previous=objc_getAssociatedObject(vc,&languageButton);
+    UIBarButtonItem *button=objc_getAssociatedObject(vc,&languageButton);
     NSArray *items=vc.navigationItem.rightBarButtonItems ?: @[];
-    if (previous && [items containsObject:previous]) return;
+    __weak UIViewController *weakVC=vc;
     NSDictionary *names=@{@"en":@"\u0627\u0644\u0625\u0646\u062c\u0644\u064a\u0632\u064a\u0629",@"tr":@"\u0627\u0644\u062a\u0631\u0643\u064a\u0629",@"ar":@"\u0627\u0644\u0639\u0631\u0628\u064a\u0629",@"fr":@"\u0627\u0644\u0641\u0631\u0646\u0633\u064a\u0629",@"de":@"\u0627\u0644\u0623\u0644\u0645\u0627\u0646\u064a\u0629",@"es":@"\u0627\u0644\u0625\u0633\u0628\u0627\u0646\u064a\u0629",@"ru":@"\u0627\u0644\u0631\u0648\u0633\u064a\u0629",@"zh-CN":@"\u0627\u0644\u0635\u064a\u0646\u064a\u0629",@"ur":@"\u0627\u0644\u0623\u0631\u062f\u064a\u0629",@"hi":@"\u0627\u0644\u0647\u0646\u062f\u064a\u0629",@"id":@"\u0627\u0644\u0625\u0646\u062f\u0648\u0646\u064a\u0633\u064a\u0629"};
-    NSMutableArray *actions=[NSMutableArray new];
-    for (NSString *code in [[names allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
-        [actions addObject:[UIAction actionWithTitle:names[code] image:nil identifier:nil handler:^(__unused UIAction *action){
-            [engine setLanguage:code forChat:chat];
-        }]];
+
+    NSMutableArray *groups=[NSMutableArray new];
+    for (NSNumber *direction in @[@NO,@YES]) {
+        BOOL incoming=direction.boolValue;
+        NSString *current=incoming ? incomingLanguage(chat) : setting(chat);
+        NSMutableArray *actions=[NSMutableArray new];
+        for (NSString *code in [[names allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+            UIAction *action=[UIAction actionWithTitle:names[code] image:nil identifier:nil handler:^(__unused UIAction *sender){
+                if (incoming) [NSUserDefaults.standardUserDefaults setObject:code forKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:chat]];
+                else [engine setLanguage:code forChat:chat];
+                installMenu(weakVC);
+                refreshViews(weakVC.view);
+            }];
+            action.state=[current isEqual:code] ? UIMenuElementStateOn : UIMenuElementStateOff;
+            [actions addObject:action];
+        }
+        [groups addObject:[UIMenu menuWithTitle:(incoming ? @"لغة الوارد" : @"لغة الصادر") children:actions]];
     }
-    [actions addObject:[UIAction actionWithTitle:@"\u0625\u064a\u0642\u0627\u0641 \u0644\u0647\u0630\u0647 \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629" image:nil identifier:nil handler:^(__unused UIAction *action){
-        [NSUserDefaults.standardUserDefaults removeObjectForKey:[@"MaxWhatsTranslate.target." stringByAppendingString:chat]];
+    [groups addObject:[UIAction actionWithTitle:@"إيقاف لهذه المحادثة" image:nil identifier:nil handler:^(__unused UIAction *sender){
+        for (NSString *prefix in @[@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target."])
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:chat]];
+        installMenu(weakVC);
+        refreshViews(weakVC.view);
     }]];
-    UIMenu *menu=[UIMenu menuWithTitle:@"\u0644\u063a\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644 \u00b7 \u062a\u064f\u062a\u0631\u062c\u0645 \u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0639\u0628\u0631 Google" children:actions];
-    UIBarButtonItem *button=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"globe"] menu:menu];
-    button.accessibilityLabel=@"\u0644\u063a\u0629 \u062a\u0631\u062c\u0645\u0629 \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629";
-    objc_setAssociatedObject(vc,&languageButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    vc.navigationItem.rightBarButtonItems=[items arrayByAddingObject:button];
+    UIMenu *menu=[UIMenu menuWithTitle:@"ترجمة المحادثة عبر Google" children:groups];
+    if (!button) {
+        button=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"globe"] menu:menu];
+        button.accessibilityLabel=@"لغة ترجمة المحادثة";
+        objc_setAssociatedObject(vc,&languageButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else button.menu=menu;
+    if (![items containsObject:button]) vc.navigationItem.rightBarButtonItems=[items arrayByAddingObject:button];
 }
 static UITextView *activeEditor(UIView *root) {
     if ([root isKindOfClass:UITextView.class] && root.isFirstResponder) return (UITextView *)root;
@@ -160,33 +185,43 @@ static void translateView(UIView *view) {
     UITextView *tv=label ? nil : (UITextView *)view;
     if (tv && tv.editable) return;
     NSString *display=label ? ((UILabel *)view).text : tv.text;
-    if (!display.length || [display isEqual:objc_getAssociatedObject(view,&translatedText)]) return;
+    if (!display.length) return;
     NSString *chat=visibleChat(view);
-    if (!setting(chat)) return;
+    NSString *target=incomingLanguage(chat);
+    NSArray *render=objc_getAssociatedObject(view,&translatedText);
+    if (render && [display isEqual:render[0]]) {
+        if ([chat isEqual:render[1]] && [target isEqual:render[2]]) return;
+        NSAttributedString *source=render[3];
+        objc_setAssociatedObject(view,&translatedText,nil,OBJC_ASSOCIATION_ASSIGN);
+        if(label) ((UILabel *)view).attributedText=source; else tv.attributedText=source;
+        display=source.string;
+    }
+    if (!target) return;
     id model=modelForView(view);
     NSNumber *outgoing=property(model,@"isFromMe");
     if (![outgoing isKindOfClass:NSNumber.class] || outgoing.boolValue) return;
     id body=property(model,@"text") ?: property(model,@"messageText");
     if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
     if (![body isKindOfClass:NSString.class] || ![plain(display) isEqual:plain(body)]) return;
-    NSArray *key=@[chat,display];
+    NSArray *key=@[chat,target,display];
     if ([objc_getAssociatedObject(view,&originalText) isEqual:key]) return;
     objc_setAssociatedObject(view,&originalText,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     __weak UIView *weak=view;
-    [engine translateIncoming:body completion:^(NSString *result){
+    [engine translateIncoming:body target:target completion:^(NSString *result){
         UIView *v=weak;
         if (!v || ![objc_getAssociatedObject(v,&originalText) isEqual:key]) return;
         UILabel *l=label ? (UILabel *)v : nil;
         UITextView *t=label ? nil : (UITextView *)v;
         if (!result.length || [plain(result) isEqual:plain(display)]) return;
         objc_setAssociatedObject(v,&originalText,nil,OBJC_ASSOCIATION_ASSIGN);
-        if (!v.window || ![visibleChat(v) isEqual:chat] || !setting(chat) || ![(label ? l.text : t.text) isEqual:display]) return;
+        if (!v.window || ![visibleChat(v) isEqual:chat] || ![incomingLanguage(chat) isEqual:target] || ![(label ? l.text : t.text) isEqual:display]) return;
         NSMutableAttributedString *content=[(label ? l.attributedText : t.attributedText) mutableCopy];
         if(!content.length) content=[[NSMutableAttributedString alloc] initWithString:display];
         NSDictionary *style=@{NSFontAttributeName:(label ? l.font : t.font) ?: [UIFont preferredFontForTextStyle:UIFontTextStyleBody],
                               NSForegroundColorAttributeName:(label ? l.textColor : t.textColor) ?: UIColor.labelColor};
+        NSAttributedString *source=[content copy];
         [content appendAttributedString:[[NSAttributedString alloc] initWithString:[@"\n" stringByAppendingString:result] attributes:style]];
-        objc_setAssociatedObject(v,&translatedText,content.string,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(v,&translatedText,@[content.string,chat,target,source],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if(label) { l.numberOfLines=0; l.attributedText=content; } else { t.attributedText=content; }
         [v invalidateIntrinsicContentSize];
     }];
