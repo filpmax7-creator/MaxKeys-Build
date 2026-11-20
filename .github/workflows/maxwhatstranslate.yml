@@ -20,7 +20,12 @@ jobs:
       - name: Build and verify deb
         shell: bash
         run: |
-          make package FINALPACKAGE=1
+          if ! make package FINALPACKAGE=1 > build.log 2>&1; then
+            cat build.log
+            grep -Ei 'error:|fatal|warning:|error [0-9]|not found' build.log | head -25 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          command -v dpkg-deb >/dev/null || brew install dpkg
           packages=(packages/*.deb)
           test "${#packages[@]}" -eq 1
           test "$(dpkg-deb -f "${packages[0]}" Package)" = com.maxfilp.maxwhatstranslate

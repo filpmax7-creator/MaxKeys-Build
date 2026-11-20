@@ -28,8 +28,8 @@ static NSString *setting(NSString *chat) {
 }
 static void note(UIViewController *vc, NSString *text) {
     if (!vc.view.window || vc.presentedViewController) return;
-    UIAlertController *a=[UIAlertController alertControllerWithTitle:@"���� ퟢ���" message:text preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"��" style:UIAlertActionStyleDefault handler:nil]];
+    UIAlertController *a=[UIAlertController alertControllerWithTitle:@"\u062a\u0631\u062c\u0645\u0629 \u0648\u0627\u062a\u0633\u0627\u0628" message:text preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"\u062a\u0645" style:UIAlertActionStyleDefault handler:nil]];
     [vc presentViewController:a animated:YES completion:nil];
 }
 static void installMenu(UIViewController *vc) {
@@ -38,19 +38,19 @@ static void installMenu(UIViewController *vc) {
     UIBarButtonItem *previous=objc_getAssociatedObject(vc,&languageButton);
     NSArray *items=vc.navigationItem.rightBarButtonItems ?: @[];
     if (previous && [items containsObject:previous]) return;
-    NSDictionary *names=@{@"en":@"������",@"tr":@"�颩��",@"ar":@"��㩠�",@"fr":@"�����",@"de":@"������",@"es":@"�靫����",@"ru":@"�����",@"zh-CN":@"�����",@"ur":@"�隩��",@"hi":@"�����",@"id":@"�������"};
+    NSDictionary *names=@{@"en":@"\u0627\u0644\u0625\u0646\u062c\u0644\u064a\u0632\u064a\u0629",@"tr":@"\u0627\u0644\u062a\u0631\u0643\u064a\u0629",@"ar":@"\u0627\u0644\u0639\u0631\u0628\u064a\u0629",@"fr":@"\u0627\u0644\u0641\u0631\u0646\u0633\u064a\u0629",@"de":@"\u0627\u0644\u0623\u0644\u0645\u0627\u0646\u064a\u0629",@"es":@"\u0627\u0644\u0625\u0633\u0628\u0627\u0646\u064a\u0629",@"ru":@"\u0627\u0644\u0631\u0648\u0633\u064a\u0629",@"zh-CN":@"\u0627\u0644\u0635\u064a\u0646\u064a\u0629",@"ur":@"\u0627\u0644\u0623\u0631\u062f\u064a\u0629",@"hi":@"\u0627\u0644\u0647\u0646\u062f\u064a\u0629",@"id":@"\u0627\u0644\u0625\u0646\u062f\u0648\u0646\u064a\u0633\u064a\u0629"};
     NSMutableArray *actions=[NSMutableArray new];
     for (NSString *code in [[names allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
         [actions addObject:[UIAction actionWithTitle:names[code] image:nil identifier:nil handler:^(__unused UIAction *action){
             [engine setLanguage:code forChat:chat];
         }]];
     }
-    [actions addObject:[UIAction actionWithTitle:@"���� ��� ��꥟���" image:nil identifier:nil handler:^(__unused UIAction *action){
+    [actions addObject:[UIAction actionWithTitle:@"\u0625\u064a\u0642\u0627\u0641 \u0644\u0647\u0630\u0647 \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629" image:nil identifier:nil handler:^(__unused UIAction *action){
         [NSUserDefaults.standardUserDefaults removeObjectForKey:[@"MaxWhatsTranslate.target." stringByAppendingString:chat]];
     }]];
-    UIMenu *menu=[UIMenu menuWithTitle:@"�� �革��� � ������ �驫��� 㠩 Google" children:actions];
+    UIMenu *menu=[UIMenu menuWithTitle:@"\u0644\u063a\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644 \u00b7 \u062a\u064f\u062a\u0631\u062c\u0645 \u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0639\u0628\u0631 Google" children:actions];
     UIBarButtonItem *button=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"globe"] menu:menu];
-    button.accessibilityLabel=@"�� ���� ��꥟���";
+    button.accessibilityLabel=@"\u0644\u063a\u0629 \u062a\u0631\u062c\u0645\u0629 \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629";
     objc_setAssociatedObject(vc,&languageButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     vc.navigationItem.rightBarButtonItems=[items arrayByAddingObject:button];
 }
@@ -94,7 +94,7 @@ static UITextView *activeEditor(UIView *root) {
         id receiver=weakTarget;
         if (!button.window || !receiver || !field.isFirstResponder || ![chatID(controller(button)) isEqual:chat] ||
             ![setting(chat) isEqual:language] || ![field.text isEqual:draft]) return;
-        if (!result.length) { note(current,@"�㨩� �颩��. ����� ����."); return; }
+        if (!result.length) { note(current,@"\u062a\u0639\u0630\u0631\u062a \u0627\u0644\u062a\u0631\u062c\u0645\u0629. \u0645\u0633\u0648\u062f\u062a\u0643 \u0645\u062d\u0641\u0648\u0638\u0629."); return; }
         UITextRange *range=[field textRangeFromPosition:field.beginningOfDocument toPosition:field.endOfDocument];
         [field replaceRange:range withText:result];
         if ([field.text isEqual:result]) [UIApplication.sharedApplication sendAction:action to:receiver from:button forEvent:nil];
