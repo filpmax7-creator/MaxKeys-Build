@@ -28,6 +28,14 @@ for directory in ("Core", "Helper", "Shared"):
             updated = original.replace("<roothide.h>", '"MaxKeysRootlessPath.h"')
             if original != updated:
                 source.write_text(updated)
+# Keep the list available for successive selections; the panel retains its own close control.
+history = next(root.rglob("KayokoHistoryListViewController.m"))
+source = history.read_text()
+start = source.index("    [[self actionHandler] activateItem:item", source.index("didSelectRowAtIndexPath:"))
+end = source.index("}];", start) + 3
+history.write_text(source[:start] + """    [[self actionHandler] activateItem:item
+                            historyKey:[self historyKey]
+                            completion:nil];""" + source[end:])
 core = root / "KayokoCore.m"
 core.write_text(core.read_text().replace("[KayokoPasteTipHookInstaller installHooks];", ""))
 (root / "KayokoCore.plist").write_text('{ Filter = { Bundles = ( "com.apple.springboard" ); }; }\n')
