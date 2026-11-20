@@ -11,6 +11,8 @@ git -C "$upstream" checkout --detach "$rev"
 python3 - <<'PY'
 from pathlib import Path
 root = Path("vendor/Kayoko/Core")
+helper = root.parent / "Helper" / "Makefile"
+helper.write_text(helper.read_text().replace("KayokoHelper_CFLAGS += -fobjc-arc", "KayokoHelper_CFLAGS += -fobjc-arc -Wno-error=deprecated-declarations"))
 build = root / "Makefile"
 build.write_text(build.read_text().replace("KayokoCore_FILES += KayokoPasteTipHooks.m", ""))
 # This build uses the conventional /var/jb rootless package layout.
