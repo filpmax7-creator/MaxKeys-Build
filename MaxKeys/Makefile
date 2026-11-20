@@ -7,3 +7,6 @@ MaxKeys_FILES = Tweak.xm
 MaxKeys_CFLAGS = -fobjc-arc
 MaxKeys_FRAMEWORKS = UIKit CoreFoundation
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+SUBPROJECTS += vendor/Kayoko/Core vendor/Kayoko/Helper
+include $(THEOS_MAKE_PATH)/aggregate.mk

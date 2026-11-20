@@ -1,9 +1,11 @@
 Package: com.maxfilp.maxkeys
 Name: MaxKeys
-Version: 0.3.3
+Version: 0.3.4
 Architecture: iphoneos-arm64
 Description: Arabic keyboard editing toolbar and Kayoko clipboard integration.
 Maintainer: Max Filp
 Author: Max Filp
 Section: Tweaks
-Depends: mobilesubstrate, firmware (>= 16.0), com.mlgm.kayoko
+Depends: mobilesubstrate, firmware (>= 16.0)
+Conflicts: com.mlgm.kayoko, codes.aurora.kayoko, dev.traurige.kayoko
+

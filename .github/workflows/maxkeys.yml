@@ -18,7 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: beerpiss/theos-action@v1.7.0
       - name: Build rootless package
-        run: make package FINALPACKAGE=1
+        run: |
+          bash prepare-kayoko.sh
+          make package FINALPACKAGE=1
       - name: Verify package
         shell: bash
         run: |
@@ -29,7 +31,10 @@ jobs:
           test "$(dpkg-deb -f "${packages[0]}" Architecture)" = iphoneos-arm64
           test "$(dpkg-deb -f "${packages[0]}" Package)" = com.maxfilp.maxkeys
           test "$(dpkg-deb -f "${packages[0]}" Version)" = "$(sed -n 's/^Version: //p' control)"
-          dpkg-deb -c "${packages[0]}"
+          dpkg-deb -c "${packages[0]}" > package-files.txt
+          for module in MaxKeys KayokoCore KayokoHelper; do
+            grep -F "/$module.dylib" package-files.txt
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: MaxKeys-rootless
