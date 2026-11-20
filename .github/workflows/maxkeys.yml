@@ -20,7 +20,11 @@ jobs:
       - name: Build rootless package
         run: |
           bash prepare-kayoko.sh
-          make package FINALPACKAGE=1
+          if ! make package FINALPACKAGE=1 TARGET=iphone:clang:latest:16.0 ARCHS="arm64 arm64e" THEOS_PACKAGE_SCHEME=rootless > build.log 2>&1; then
+            cat build.log
+            grep -E 'error:|fatal:|No rule|not found|Error [0-9]' build.log | head -20 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - name: Verify package
         shell: bash
         run: |
