@@ -3,6 +3,7 @@
 #import "ConversationTranslator.h"
 
 static ConversationTranslator *engine;
+static BOOL twitter;
 static char languageButton, sending, originalText, translatedText;
 
 static id property(id object, NSString *key) {
@@ -15,6 +16,20 @@ static UIViewController *controller(UIView *view) {
     return nil;
 }
 static NSString *chatID(UIViewController *vc) {
+    if (twitter) {
+        for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
+            id vm=property(screen,@"viewModel");
+            id conversation=property(screen,@"conversation") ?: property(vm,@"conversation");
+            for (id source in @[screen, vm ?: NSNull.null, conversation ?: NSNull.null]) {
+                id identifier=property(source,@"conversationID") ?: property(source,@"conversationId");
+                if (!identifier && source==conversation) identifier=property(source,@"identifier");
+                if ([identifier isKindOfClass:NSNumber.class]) identifier=[identifier stringValue];
+                if ([identifier isKindOfClass:NSString.class] && [identifier length])
+                    return [@"twitter.dm." stringByAppendingString:identifier];
+            }
+        }
+        return nil;
+    }
     id session = property(vc, @"chatSession");
     for (NSString *key in @[@"contactJID", @"jid", @"chatJID"]) {
         id jid = property(session,key);
@@ -23,16 +38,21 @@ static NSString *chatID(UIViewController *vc) {
     }
     return nil;
 }
+static BOOL translationAllowed(NSString *chat) {
+    return !twitter || (chat.length && [NSUserDefaults.standardUserDefaults boolForKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]]);
+}
 static NSString *setting(NSString *chat) {
+    if (!translationAllowed(chat)) return nil;
     return chat ? [NSUserDefaults.standardUserDefaults stringForKey:[@"MaxWhatsTranslate.target." stringByAppendingString:chat]] : nil;
 }
 static void note(UIViewController *vc, NSString *text) {
     if (!vc.view.window || vc.presentedViewController) return;
-    UIAlertController *a=[UIAlertController alertControllerWithTitle:@"\u062a\u0631\u062c\u0645\u0629 \u0648\u0627\u062a\u0633\u0627\u0628" message:text preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a=[UIAlertController alertControllerWithTitle:twitter ? @"ترجمة X" : @"\u062a\u0631\u062c\u0645\u0629 \u0648\u0627\u062a\u0633\u0627\u0628" message:text preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"\u062a\u0645" style:UIAlertActionStyleDefault handler:nil]];
     [vc presentViewController:a animated:YES completion:nil];
 }
 static NSString *incomingLanguage(NSString *chat) {
+    if (!translationAllowed(chat)) return nil;
     if (!chat) return nil;
     return [NSUserDefaults.standardUserDefaults stringForKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:chat]] ?: (setting(chat) ? @"ar" : nil);
 }
@@ -50,6 +70,20 @@ static void installMenu(UIViewController *vc) {
     NSDictionary *names=@{@"en":@"\u0627\u0644\u0625\u0646\u062c\u0644\u064a\u0632\u064a\u0629",@"tr":@"\u0627\u0644\u062a\u0631\u0643\u064a\u0629",@"ar":@"\u0627\u0644\u0639\u0631\u0628\u064a\u0629",@"fr":@"\u0627\u0644\u0641\u0631\u0646\u0633\u064a\u0629",@"de":@"\u0627\u0644\u0623\u0644\u0645\u0627\u0646\u064a\u0629",@"es":@"\u0627\u0644\u0625\u0633\u0628\u0627\u0646\u064a\u0629",@"ru":@"\u0627\u0644\u0631\u0648\u0633\u064a\u0629",@"zh-CN":@"\u0627\u0644\u0635\u064a\u0646\u064a\u0629",@"ur":@"\u0627\u0644\u0623\u0631\u062f\u064a\u0629",@"hi":@"\u0627\u0644\u0647\u0646\u062f\u064a\u0629",@"id":@"\u0627\u0644\u0625\u0646\u062f\u0648\u0646\u064a\u0633\u064a\u0629"};
 
     NSMutableArray *groups=[NSMutableArray new];
+    if (!translationAllowed(chat)) {
+        [groups addObject:[UIAction actionWithTitle:@"تفعيل الترجمة عبر Google" image:nil identifier:nil handler:^(__unused UIAction *sender){
+            UIAlertController *dialog=[UIAlertController alertControllerWithTitle:@"ترجمة هذه المحادثة" message:@"سيُرسل نص الرسائل الواردة والمسودات عند الإرسال إلى Google للترجمة. يمكنك إيقافها من هذه القائمة." preferredStyle:UIAlertControllerStyleAlert];
+            [dialog addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+            [dialog addAction:[UIAlertAction actionWithTitle:@"تفعيل لهذه المحادثة" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *selection){
+                if (![chatID(weakVC) isEqual:chat]) return;
+                [NSUserDefaults.standardUserDefaults setBool:YES forKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]];
+                [engine setLanguage:@"en" forChat:chat];
+                installMenu(weakVC);
+                refreshViews(weakVC.view);
+            }]];
+            [weakVC presentViewController:dialog animated:YES completion:nil];
+        }]];
+    } else {
     for (NSNumber *direction in @[@NO,@YES]) {
         BOOL incoming=direction.boolValue;
         NSString *current=incoming ? incomingLanguage(chat) : setting(chat);
@@ -67,7 +101,7 @@ static void installMenu(UIViewController *vc) {
         [groups addObject:[UIMenu menuWithTitle:(incoming ? @"لغة الوارد" : @"لغة الصادر") children:actions]];
     }
     [groups addObject:[UIAction actionWithTitle:@"إيقاف لهذه المحادثة" image:nil identifier:nil handler:^(__unused UIAction *sender){
-        for (NSString *prefix in @[@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target."])
+        for (NSString *prefix in @[@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target.",@"MaxTranslate.X.Google."])
             [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:chat]];
         installMenu(weakVC);
         refreshViews(weakVC.view);
@@ -75,6 +109,7 @@ static void installMenu(UIViewController *vc) {
     [groups addObject:[UIAction actionWithTitle:@"فحص ترجمة الوارد" image:nil identifier:nil handler:^(__unused UIAction *sender){
         showIncomingReport(weakVC);
     }]];
+    }
     UIMenu *menu=[UIMenu menuWithTitle:@"ترجمة المحادثة عبر Google" children:groups];
     if (!button) {
         button=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"globe"] menu:menu];
@@ -104,6 +139,7 @@ static UITextView *activeEditor(UIView *root) {
     NSString *language=setting(chat);
     NSString *name=NSStringFromSelector(action).lowercaseString;
     BOOL isSend=[name containsString:@"sendbutton"] || [name isEqual:@"sendmessage:"] || [name isEqual:@"sendpressed:"];
+    if (twitter && ([name containsString:@"sendmessage"] || [name containsString:@"senddirectmessage"] || [self.accessibilityIdentifier.lowercaseString isEqual:@"dmsendbutton"])) isSend=YES;
     if (!isSend || !language || !target) { %orig; return; }
     UITextView *editor=activeEditor(vc.view);
     NSString *draft=[editor.text copy];
@@ -141,7 +177,7 @@ static NSString *visibleChat(UIView *v) {
 }
 
 static NSNumber *deliveryDirection(id owner) {
-    for (NSString *key in @[@"isFromMe",@"fromMe",@"isOutgoing",@"outgoing",@"isIncoming"]) {
+    for (NSString *key in @[@"isFromMe",@"fromMe",@"isOutgoing",@"outgoing",@"isSentByCurrentUser",@"isOutgoingMessage",@"isIncoming"]) {
         id flag=property(owner,key);
         if ([flag isKindOfClass:NSNumber.class]) return [key isEqual:@"isIncoming"] ? @(![flag boolValue]) : flag;
     }
@@ -150,7 +186,7 @@ static NSNumber *deliveryDirection(id owner) {
 static id messageIn(id owner) {
     for (id holder in @[owner ?: NSNull.null, property(owner,@"cellData") ?: NSNull.null,
                          property(owner,@"viewModel") ?: NSNull.null, property(owner,@"messageData") ?: NSNull.null, property(owner,@"messageViewModel") ?: NSNull.null]) {
-        for (NSString *key in @[@"message",@"waMessage",@"messageObject"]) {
+        for (NSString *key in @[@"message",@"waMessage",@"messageObject",@"directMessage",@"dmMessage"]) {
             id model=property(holder,key);
             if (deliveryDirection(model)) return model;
         }
@@ -234,7 +270,7 @@ static void translateView(UIView *view) {
     id model=modelForView(view);
     NSNumber *outgoing=deliveryDirection(model);
     if (![outgoing isKindOfClass:NSNumber.class] || outgoing.boolValue) return;
-    id body=property(model,@"text") ?: property(model,@"messageText");
+    id body=property(model,@"text") ?: property(model,@"messageText") ?: (twitter ? property(model,@"fullText") : nil);
     if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
     if (![body isKindOfClass:NSString.class] || ![plain(display) isEqual:plain(body)]) return;
     NSArray *key=@[chat,target,display];
@@ -285,7 +321,7 @@ static NSArray *sliceIdentity(UIView *slice) {
     id model=modelForView(slice);
     NSNumber *direction=deliveryDirection(model);
     if (!direction || direction.boolValue) return nil;
-    id body=property(model,@"text") ?: property(model,@"messageText");
+    id body=property(model,@"text") ?: property(model,@"messageText") ?: (twitter ? property(model,@"fullText") : nil);
     if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
     if (![body isKindOfClass:NSString.class] || ![body length]) return nil;
     return @[chat,language,body];
@@ -343,9 +379,10 @@ static void updateSlice(UIView *slice) {
 %end
 %end
 %ctor {
-    if ([NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
+    twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
+    if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
         engine=[ConversationTranslator new];
         %init;
-        if (NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }
+        if (!twitter && NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }
     }
 }

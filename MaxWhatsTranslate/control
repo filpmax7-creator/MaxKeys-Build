@@ -1,9 +1,9 @@
 Package: com.maxfilp.maxwhatstranslate
 Name: MaxWhatsTranslate
-Version: 0.1.4
+Version: 0.1.5
 Architecture: iphoneos-arm64
 Maintainer: Max Filp
 Author: Max Filp
-Description: Per-chat message translation for WhatsApp Messenger.
+Description: Per-chat message translation for WhatsApp Messenger and X direct messages.
 Section: Tweaks
 Depends: mobilesubstrate, firmware (>= 16.0)
