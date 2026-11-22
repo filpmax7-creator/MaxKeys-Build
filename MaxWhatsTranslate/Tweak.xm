@@ -127,67 +127,98 @@ static UITextView *activeEditor(UIView *root) {
     return nil;
 }
 static char xLauncher;
-static UIViewController *frontController(UIViewController *vc) {
-    while (vc) {
-        UIViewController *next=vc.presentedViewController;
-        if (!next && [vc isKindOfClass:UINavigationController.class]) next=((UINavigationController *)vc).visibleViewController;
-        if (!next && [vc isKindOfClass:UITabBarController.class]) next=((UITabBarController *)vc).selectedViewController;
-        if (!next || next==vc) return vc;
-        vc=next;
+static BOOL isDMComposer(UIView *editor) {
+    for (UIResponder *r=editor; r && ![r isKindOfClass:UIWindow.class]; r=r.nextResponder) {
+        NSString *name=NSStringFromClass(r.class).lowercaseString;
+        if ([name containsString:@"directmessage"] || [name containsString:@"dmconversation"] ||
+            [name containsString:@"dmcomposer"] || [name containsString:@"dmthread"] ||
+            [name containsString:@"xchatconversation"]) return YES;
     }
-    return nil;
+    return NO;
 }
-static UIViewController *conversationScreen(UIViewController *vc) {
-    if (!vc || !vc.viewIfLoaded.window) return nil;
-    for (UIViewController *child in vc.childViewControllers.reverseObjectEnumerator) {
-        UIViewController *found=conversationScreen(child);
-        if (found) return found;
-    }
-    return chatID(vc).length ? vc : nil;
-}
-static void addXLauncher(UIWindow *window) {
-    if (!window.isKeyWindow || window.windowLevel!=UIWindowLevelNormal || !window.rootViewController) return;
-    UIButton *button=objc_getAssociatedObject(window,&xLauncher);
-    if (button) { [window bringSubviewToFront:button]; return; }
-    button=[UIButton buttonWithType:UIButtonTypeSystem];
-    button.backgroundColor=UIColor.secondarySystemBackgroundColor;
-    button.layer.cornerRadius=20;
-    [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
-    button.accessibilityLabel=@"ترجمة رسائل X";
-    __weak UIWindow *weakWindow=window;
-    button.showsMenuAsPrimaryAction=YES;
-    button.menu=[UIMenu menuWithChildren:@[[UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)){
-        UIViewController *front=frontController(weakWindow.rootViewController);
-        UIViewController *screen=conversationScreen(front);
-        if (screen) {
-            installMenu(screen);
-            UIBarButtonItem *item=objc_getAssociatedObject(screen,&languageButton);
-            if (item.menu.children.count) { completion(item.menu.children); return; }
+static void showXOptions(UIViewController *vc, UIButton *anchor, NSString *chat, NSInteger page) {
+    if (!chat.length || ![chatID(vc) isEqual:chat] || !vc.view.window || vc.presentedViewController) return;
+    BOOL enabled=translationAllowed(chat);
+    NSString *title=page==1 ? @"لغة الوارد" : page==2 ? @"لغة الصادر" : @"ترجمة رسائل X";
+    NSString *message=enabled ? nil : @"عند التفعيل، يُرسل نص الوارد والمسودة عند الإرسال إلى Google للترجمة في هذه المحادثة.";
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleActionSheet];
+    if (!enabled) {
+        [sheet addAction:[UIAlertAction actionWithTitle:@"تفعيل لهذه المحادثة" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+            if (![chatID(vc) isEqual:chat]) return;
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]];
+            [engine setLanguage:@"en" forChat:chat];
+            refreshViews(vc.view);
+        }]];
+    } else if (page) {
+        NSDictionary *names=@{@"en":@"\u0627\u0644\u0625\u0646\u062c\u0644\u064a\u0632\u064a\u0629",@"tr":@"\u0627\u0644\u062a\u0631\u0643\u064a\u0629",@"ar":@"\u0627\u0644\u0639\u0631\u0628\u064a\u0629",@"fr":@"\u0627\u0644\u0641\u0631\u0646\u0633\u064a\u0629",@"de":@"\u0627\u0644\u0623\u0644\u0645\u0627\u0646\u064a\u0629",@"es":@"\u0627\u0644\u0625\u0633\u0628\u0627\u0646\u064a\u0629",@"ru":@"\u0627\u0644\u0631\u0648\u0633\u064a\u0629",@"zh-CN":@"\u0627\u0644\u0635\u064a\u0646\u064a\u0629",@"ur":@"\u0627\u0644\u0623\u0631\u062f\u064a\u0629",@"hi":@"\u0627\u0644\u0647\u0646\u062f\u064a\u0629",@"id":@"\u0627\u0644\u0625\u0646\u062f\u0648\u0646\u064a\u0633\u064a\u0629"};
+        for (NSString *code in [[names allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+            NSString *current=page==1 ? incomingLanguage(chat) : setting(chat);
+            NSString *label=[code isEqual:current] ? [@"✓ " stringByAppendingString:names[code]] : names[code];
+            [sheet addAction:[UIAlertAction actionWithTitle:label style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+                if (![chatID(vc) isEqual:chat]) return;
+                if (page==1) [NSUserDefaults.standardUserDefaults setObject:code forKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:chat]];
+                else [engine setLanguage:code forChat:chat];
+                refreshViews(vc.view);
+            }]];
         }
-        completion(@[[UIAction actionWithTitle:@"فحص واجهة المحادثة" image:nil identifier:nil handler:^(__unused UIAction *sender){
-            if (!front) return;
-            NSMutableArray *classes=[NSMutableArray arrayWithObject:NSStringFromClass(front.class)];
-            for (UIViewController *child in front.childViewControllers) [classes addObject:NSStringFromClass(child.class)];
-            note(front,[NSString stringWithFormat:@"تعذّر تحديد المحادثة. إذا كنت داخل الرسائل الخاصة، أرسل أسماء الواجهة التالية:\n%@",[classes componentsJoinedByString:@"\n"]]);
-        }]]);
-    }]]];
+    } else {
+        for (NSNumber *choice in @[@1,@2]) {
+            [sheet addAction:[UIAlertAction actionWithTitle:choice.intValue==1 ? @"لغة الوارد" : @"لغة الصادر" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+                id<UIViewControllerTransitionCoordinator> transition=sheet.transitionCoordinator;
+                void (^open)(void)=^{ showXOptions(vc,anchor,chat,choice.integerValue); };
+                if (!transition || ![transition animateAlongsideTransition:nil completion:^(__unused id<UIViewControllerTransitionCoordinatorContext> ctx){ open(); }])
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,400*NSEC_PER_MSEC),dispatch_get_main_queue(),open);
+            }]];
+        }
+        [sheet addAction:[UIAlertAction actionWithTitle:@"إيقاف لهذه المحادثة" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *a){
+            for (NSString *prefix in @[@"MaxTranslate.X.Google.",@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target."])
+                [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:chat]];
+            refreshViews(vc.view);
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView=anchor.window ? anchor : vc.view;
+    sheet.popoverPresentationController.sourceRect=sheet.popoverPresentationController.sourceView.bounds;
+    [vc presentViewController:sheet animated:YES completion:nil];
+}
+static void updateXComposer(UITextView *editor) {
+    UIButton *old=objc_getAssociatedObject(editor,&xLauncher);
+    UIViewController *vc=controller(editor);
+    NSString *chat=chatID(vc);
+    if (!editor.window || !editor.isFirstResponder || !editor.editable || (!isDMComposer(editor) && !chat.length)) {
+        [old removeFromSuperview];
+        objc_setAssociatedObject(editor,&xLauncher,nil,OBJC_ASSOCIATION_ASSIGN);
+        return;
+    }
+    if (old.superview==vc.view && old) return;
+    if (!vc || ![editor isDescendantOfView:vc.view]) return;
+    [old removeFromSuperview];
+    UIButton *button=[UIButton buttonWithType:UIButtonTypeSystem];
+    button.accessibilityLabel=@"ترجمة هذه المحادثة";
+    button.backgroundColor=UIColor.secondarySystemBackgroundColor;
+    button.layer.cornerRadius=18;
+    [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
+    __weak UITextView *weakEditor=editor;
+    __weak UIButton *weakButton=button;
+    [button addAction:[UIAction actionWithHandler:^(__unused UIAction *a){
+        UITextView *field=weakEditor;
+        UIViewController *owner=controller(field);
+        NSString *key=chatID(owner);
+        if (!key.length) { note(owner,[NSString stringWithFormat:@"تعذّر تحديد معرّف المحادثة. واجهة الكتابة: %@ · %@",NSStringFromClass(field.class),NSStringFromClass(owner.class)]); return; }
+        showXOptions(owner,weakButton,key,0);
+    }] forControlEvents:UIControlEventTouchUpInside];
+    [vc.view addSubview:button];
     button.translatesAutoresizingMaskIntoConstraints=NO;
-    [window addSubview:button];
-    [NSLayoutConstraint activateConstraints:@[
-        [button.trailingAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.trailingAnchor constant:-10],
-        [button.topAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.topAnchor constant:50],
-        [button.widthAnchor constraintEqualToConstant:40],[button.heightAnchor constraintEqualToConstant:40]]];
-    objc_setAssociatedObject(window,&xLauncher,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [NSLayoutConstraint activateConstraints:@[[button.trailingAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.trailingAnchor constant:-8],
+        [button.bottomAnchor constraintEqualToAnchor:editor.topAnchor constant:-4],
+        [button.widthAnchor constraintEqualToConstant:36],[button.heightAnchor constraintEqualToConstant:36]]];
+    objc_setAssociatedObject(editor,&xLauncher,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    installMenu(self);
-    if (twitter) addXLauncher(self.viewIfLoaded.window);
+    if (!twitter) installMenu(self);
 }
-%end
-%hook UIWindow
-- (void)becomeKeyWindow { %orig; if (twitter) addXLauncher(self); }
 %end
 %hook UIControl
 - (void)sendAction:(SEL)action to:(id)target forEvent:(UIEvent *)event {
@@ -365,7 +396,8 @@ static void translateView(UIView *view) {
 - (void)layoutSubviews { %orig; translateView(self); }
 %end
 %hook UITextView
-- (void)layoutSubviews { %orig; translateView(self); }
+- (void)didMoveToWindow { %orig; if (twitter) updateXComposer(self); }
+- (void)layoutSubviews { %orig; if (twitter && self.isFirstResponder) updateXComposer(self); translateView(self); }
 %end
 
 // WhatsApp draws this text slice itself. Give its translation a separate view.
@@ -438,6 +470,13 @@ static void updateSlice(UIView *slice) {
 %ctor {
     twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
     if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
+        if (twitter) {
+            for (NSString *event in @[UITextViewTextDidBeginEditingNotification,UITextViewTextDidEndEditingNotification]) {
+                [NSNotificationCenter.defaultCenter addObserverForName:event object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){
+                    if ([n.object isKindOfClass:UITextView.class]) updateXComposer(n.object);
+                }];
+            }
+        }
         engine=[ConversationTranslator new];
         %init;
         if (!twitter && NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }
