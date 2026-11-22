@@ -18,10 +18,10 @@ static UIViewController *controller(UIView *view) {
 static NSString *chatID(UIViewController *vc) {
     if (twitter) {
         for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
-            id vm=property(screen,@"viewModel");
-            id conversation=property(screen,@"conversation") ?: property(vm,@"conversation");
+            id vm=property(screen,@"viewModel") ?: property(screen,@"conversationViewModel") ?: property(screen,@"presenter");
+            id conversation=property(screen,@"conversation") ?: property(vm,@"conversation") ?: property(screen,@"thread") ?: property(vm,@"thread");
             for (id source in @[screen, vm ?: NSNull.null, conversation ?: NSNull.null]) {
-                id identifier=property(source,@"conversationID") ?: property(source,@"conversationId");
+                id identifier=property(source,@"conversationID") ?: property(source,@"conversationId") ?: property(source,@"threadID") ?: property(source,@"threadId");
                 if (!identifier && source==conversation) identifier=property(source,@"identifier");
                 if ([identifier isKindOfClass:NSNumber.class]) identifier=[identifier stringValue];
                 if ([identifier isKindOfClass:NSString.class] && [identifier length])
@@ -63,7 +63,7 @@ static void refreshViews(UIView *view) {
 static void showIncomingReport(UIViewController *vc);
 static void installMenu(UIViewController *vc) {
     NSString *chat=chatID(vc);
-    if (!chat || !vc.navigationController) return;
+    if (!chat || (!twitter && !vc.navigationController)) return;
     UIBarButtonItem *button=objc_getAssociatedObject(vc,&languageButton);
     NSArray *items=vc.navigationItem.rightBarButtonItems ?: @[];
     __weak UIViewController *weakVC=vc;
@@ -126,11 +126,68 @@ static UITextView *activeEditor(UIView *root) {
     }
     return nil;
 }
+static char xLauncher;
+static UIViewController *frontController(UIViewController *vc) {
+    while (vc) {
+        UIViewController *next=vc.presentedViewController;
+        if (!next && [vc isKindOfClass:UINavigationController.class]) next=((UINavigationController *)vc).visibleViewController;
+        if (!next && [vc isKindOfClass:UITabBarController.class]) next=((UITabBarController *)vc).selectedViewController;
+        if (!next || next==vc) return vc;
+        vc=next;
+    }
+    return nil;
+}
+static UIViewController *conversationScreen(UIViewController *vc) {
+    if (!vc || !vc.viewIfLoaded.window) return nil;
+    for (UIViewController *child in vc.childViewControllers.reverseObjectEnumerator) {
+        UIViewController *found=conversationScreen(child);
+        if (found) return found;
+    }
+    return chatID(vc).length ? vc : nil;
+}
+static void addXLauncher(UIWindow *window) {
+    if (!window.isKeyWindow || window.windowLevel!=UIWindowLevelNormal || !window.rootViewController) return;
+    UIButton *button=objc_getAssociatedObject(window,&xLauncher);
+    if (button) { [window bringSubviewToFront:button]; return; }
+    button=[UIButton buttonWithType:UIButtonTypeSystem];
+    button.backgroundColor=UIColor.secondarySystemBackgroundColor;
+    button.layer.cornerRadius=20;
+    [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
+    button.accessibilityLabel=@"ترجمة رسائل X";
+    __weak UIWindow *weakWindow=window;
+    button.showsMenuAsPrimaryAction=YES;
+    button.menu=[UIMenu menuWithChildren:@[[UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)){
+        UIViewController *front=frontController(weakWindow.rootViewController);
+        UIViewController *screen=conversationScreen(front);
+        if (screen) {
+            installMenu(screen);
+            UIBarButtonItem *item=objc_getAssociatedObject(screen,&languageButton);
+            if (item.menu.children.count) { completion(item.menu.children); return; }
+        }
+        completion(@[[UIAction actionWithTitle:@"فحص واجهة المحادثة" image:nil identifier:nil handler:^(__unused UIAction *sender){
+            if (!front) return;
+            NSMutableArray *classes=[NSMutableArray arrayWithObject:NSStringFromClass(front.class)];
+            for (UIViewController *child in front.childViewControllers) [classes addObject:NSStringFromClass(child.class)];
+            note(front,[NSString stringWithFormat:@"تعذّر تحديد المحادثة. إذا كنت داخل الرسائل الخاصة، أرسل أسماء الواجهة التالية:\n%@",[classes componentsJoinedByString:@"\n"]]);
+        }]]);
+    }]]];
+    button.translatesAutoresizingMaskIntoConstraints=NO;
+    [window addSubview:button];
+    [NSLayoutConstraint activateConstraints:@[
+        [button.trailingAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.trailingAnchor constant:-10],
+        [button.topAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.topAnchor constant:50],
+        [button.widthAnchor constraintEqualToConstant:40],[button.heightAnchor constraintEqualToConstant:40]]];
+    objc_setAssociatedObject(window,&xLauncher,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     installMenu(self);
+    if (twitter) addXLauncher(self.viewIfLoaded.window);
 }
+%end
+%hook UIWindow
+- (void)becomeKeyWindow { %orig; if (twitter) addXLauncher(self); }
 %end
 %hook UIControl
 - (void)sendAction:(SEL)action to:(id)target forEvent:(UIEvent *)event {
