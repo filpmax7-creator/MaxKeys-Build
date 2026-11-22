@@ -15,6 +15,16 @@ static UIViewController *controller(UIView *view) {
         if ([r isKindOfClass:UIViewController.class]) return (UIViewController *)r;
     return nil;
 }
+static char xSession;
+static UIViewController *xSessionOwner(UIViewController *vc) {
+    UIViewController *composer=nil;
+    for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
+        NSString *name=NSStringFromClass(screen.class).lowercaseString;
+        if ([name isEqual:@"chatmessagecomposer.messagecomposerviewcontroller"]) composer=screen;
+        if ([name containsString:@"dmconversation"] || [name containsString:@"xchatconversation"] || [name containsString:@"dmthread"]) return screen;
+    }
+    return composer;
+}
 static NSString *chatID(UIViewController *vc) {
     if (twitter) {
         for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
@@ -28,7 +38,14 @@ static NSString *chatID(UIViewController *vc) {
                     return [@"twitter.dm." stringByAppendingString:identifier];
             }
         }
-        return nil;
+        UIViewController *owner=xSessionOwner(vc);
+        if (!owner || !owner.viewIfLoaded.window) return nil;
+        NSString *key=objc_getAssociatedObject(owner,&xSession);
+        if (!key) {
+            key=[@"twitter.session." stringByAppendingString:NSUUID.UUID.UUIDString];
+            objc_setAssociatedObject(owner,&xSession,key,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        }
+        return key;
     }
     id session = property(vc, @"chatSession");
     for (NSString *key in @[@"contactJID", @"jid", @"chatJID"]) {
@@ -215,6 +232,15 @@ static void updateXComposer(UITextView *editor) {
     objc_setAssociatedObject(editor,&xLauncher,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 %hook UIViewController
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    NSString *key=objc_getAssociatedObject(self,&xSession);
+    if (key && !self.presentedViewController) {
+        for (NSString *prefix in @[@"MaxTranslate.X.Google.",@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target."])
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:key]];
+        objc_setAssociatedObject(self,&xSession,nil,OBJC_ASSOCIATION_ASSIGN);
+    }
+}
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (!twitter) installMenu(self);
