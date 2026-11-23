@@ -257,6 +257,24 @@ static void showIncomingReport(UIViewController *vc) {
     NSString *target=incomingLanguage(chatID(vc)) ?: @"—";
     note(vc,[NSString stringWithFormat:@"اللغة: %@ · الخلايا: %lu · النماذج: %lu\n%@",target,(unsigned long)cells,(unsigned long)models,[classes.array componentsJoinedByString:@"\n"]]);
 }
+extern "C" int32_t MXOutgoingMessage(const void *holder);
+static NSNumber *xBubbleDirection(UIView *view) {
+    UIView *bubble=nil;
+    for (UIView *p=view.superview;p;p=p.superview) {
+        NSString *name=NSStringFromClass(p.class);
+        if ([name isEqual:@"ChatConversation.MessageTextView"]) bubble=p;
+        if ([name containsString:@"MessageQuote"]) return nil;
+        if (![name isEqual:@"ChatConversation.MessageCell"]) continue;
+        if (!bubble) return nil;
+        int32_t flag=MXOutgoingMessage((__bridge const void *)p);
+        if (flag>=0) return @(flag);
+        CGRect frame=[bubble convertRect:bubble.bounds toView:p];
+        CGFloat left=CGRectGetMinX(frame),right=CGRectGetWidth(p.bounds)-CGRectGetMaxX(frame);
+        if (frame.size.width<=0 || left<0 || right<0 || fabs(left-right)<12) return nil;
+        return @(left>right);
+    }
+    return nil;
+}
 static void translateView(UIView *view) {
     if (!view.window) return;
     BOOL label=[view isKindOfClass:UILabel.class];
@@ -277,8 +295,10 @@ static void translateView(UIView *view) {
     if (!target) return;
     id model=modelForView(view);
     NSNumber *outgoing=deliveryDirection(model);
-    if (![outgoing isKindOfClass:NSNumber.class] || outgoing.boolValue) return;
-    id body=property(model,@"text") ?: property(model,@"messageText") ?: (twitter ? property(model,@"fullText") : nil);
+    BOOL useBubble=twitter && !outgoing && !label;
+    if (useBubble) outgoing=xBubbleDirection(view);
+    if (!outgoing || outgoing.boolValue) return;
+    id body=useBubble ? display : (property(model,@"text") ?: property(model,@"messageText") ?: (twitter ? property(model,@"fullText") : nil));
     if ([body isKindOfClass:NSAttributedString.class]) body=[body string];
     if (![body isKindOfClass:NSString.class] || ![plain(display) isEqual:plain(body)]) return;
     NSArray *key=@[chat,target,display];
@@ -434,11 +454,143 @@ static void updateSlice(UIView *slice) {
 %end
 %end
 
+static char postTranslateButton, postOriginalFrame;
+static NSString *postString(id value) {
+    if ([value isKindOfClass:NSAttributedString.class]) value=[value string];
+    return [value isKindOfClass:NSString.class] && [value length] ? value : nil;
+}
+static NSString *postText(UIView *bar) {
+    for (UIView *v=bar; v; v=v.superview) {
+        id status=property(v,@"status") ?: property(property(v,@"viewModel"),@"status");
+        NSString *text=postString(property(status,@"fullText")) ?: postString(property(status,@"text"));
+        if (text) return text;
+        if ([NSStringFromClass(v.class) containsString:@"StandardStatusView"]) {
+            for (NSString *key in @[@"statusTextView",@"tweetTextView",@"textView",@"bodyTextView"]) {
+                id body=property(v,key);
+                text=postString(property(body,@"attributedText")) ?: postString(property(body,@"text"));
+                if (text) return text;
+            }
+            NSMutableArray *queue=[v.subviews mutableCopy];
+            for (NSUInteger i=0;i<queue.count;i++) {
+                UIView *child=queue[i]; NSString *name=NSStringFromClass(child.class).lowercaseString;
+                if ([name containsString:@"quote"] || [name containsString:@"card"] || [name containsString:@"header"] || child==bar) continue;
+                if ([name isEqual:@"ttastatusbodyattributedtextview"] || [name containsString:@"tweettext"] || [name containsString:@"statustext"]) {
+                    text=postString(property(child,@"attributedText")) ?: postString(property(child,@"text"));
+                    if (text) return text;
+                }
+                [queue addObjectsFromArray:child.subviews];
+            }
+        }
+        if ([v isKindOfClass:UITableViewCell.class]) break;
+    }
+    return nil;
+}
+static void translatePost(UIView *bar, NSString *code) {
+    NSString *text=postText(bar);
+    UIViewController *vc=controller(bar);
+    if (!text) {note(vc,@"تعذّرت قراءة نص التغريدة."); return;}
+    __weak UIView *weakBar=bar;
+    [engine translateIncoming:text target:code completion:^(NSString *result){
+        UIView *current=weakBar;
+        if (!current.window || ![postText(current) isEqual:text]) return;
+        note(controller(current),result.length ? result : @"تعذّرت ترجمة التغريدة.");
+    }];
+}
+static UIMenu *postMenu(UIView *bar) {
+    __weak UIView *weak=bar;
+    UIDeferredMenuElement *options=[UIDeferredMenuElement elementWithUncachedProvider:^(void (^done)(NSArray<UIMenuElement *> *)){
+        NSString *target=[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.PostLanguage"] ?: @"ar";
+        NSLocale *locale=NSLocale.currentLocale;
+        NSString *language=[locale localizedStringForLanguageCode:target] ?: target;
+        UIAction *translate=[UIAction actionWithTitle:[@"ترجمة إلى " stringByAppendingString:language] image:nil identifier:nil handler:^(__unused UIAction *a){ translatePost(weak,target); }];
+        NSMutableArray *choices=[NSMutableArray new];
+        NSArray *codes=[NSLocale.ISOLanguageCodes sortedArrayUsingComparator:^NSComparisonResult(NSString *a,NSString *b){
+            return [([locale localizedStringForLanguageCode:a] ?: a) localizedCaseInsensitiveCompare:([locale localizedStringForLanguageCode:b] ?: b)];
+        }];
+        for (NSString *code in codes) {
+            UIAction *item=[UIAction actionWithTitle:([locale localizedStringForLanguageCode:code] ?: code) image:nil identifier:nil handler:^(__unused UIAction *a){
+                [NSUserDefaults.standardUserDefaults setObject:code forKey:@"MaxTranslate.PostLanguage"];
+                translatePost(weak,code);
+            }];
+            item.state=[code isEqual:target] ? UIMenuElementStateOn : UIMenuElementStateOff;
+            [choices addObject:item];
+        }
+        done(@[translate,[UIMenu menuWithTitle:@"لغة التغريدات" children:choices]]);
+    }];
+    return [UIMenu menuWithTitle:@"ترجمة التغريدة" children:@[options]];
+}
+static void updatePostBar(UIView *bar) {
+    if (!bar.window || CGRectGetWidth(bar.bounds)<120) return;
+    UIButton *button=objc_getAssociatedObject(bar,&postTranslateButton);
+    NSMutableArray *occupied=[NSMutableArray new];
+    for (UIView *child in bar.subviews) {
+        if (child==button || child.hidden || child.alpha<0.01 || CGRectIsEmpty(child.frame)) continue;
+        [occupied addObject:[NSValue valueWithCGRect:child.frame]];
+    }
+    [occupied sortUsingComparator:^NSComparisonResult(NSValue *a,NSValue *b){
+        CGFloat x=CGRectGetMinX(a.CGRectValue),y=CGRectGetMinX(b.CGRectValue);
+        return x<y ? NSOrderedAscending : x>y ? NSOrderedDescending : NSOrderedSame;
+    }];
+    CGFloat end=0,gap=0,start=0;
+    for (NSValue *value in occupied) {
+        CGRect r=value.CGRectValue;
+        if (CGRectGetMinX(r)-end>gap) {gap=CGRectGetMinX(r)-end;start=end;}
+        end=MAX(end,CGRectGetMaxX(r));
+    }
+    CGFloat width=CGRectGetWidth(bar.bounds);
+    if (width-end>gap) {gap=width-end;start=end;}
+    if (gap<28) {
+        CGFloat reserve=28, scale=(width-reserve)/width;
+        for (UIView *child in bar.subviews) {
+            if (child==button || child.hidden || CGRectIsEmpty(child.frame)) continue;
+            CGRect before=child.frame, after=before;
+            after.origin.x=before.origin.x*scale; after.size.width=before.size.width*scale;
+            if (CGRectGetMaxX(after)>width-reserve) after.origin.x=width-reserve-after.size.width;
+            objc_setAssociatedObject(child,&postOriginalFrame,@[[NSValue valueWithCGRect:before],[NSValue valueWithCGRect:after]],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            child.frame=after;
+        }
+        gap=reserve;start=width-reserve;
+    }
+    if (!button) {
+        button=[UIButton buttonWithType:UIButtonTypeSystem];
+        [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
+        button.accessibilityLabel=@"ترجمة التغريدة";
+        button.menu=postMenu(bar);button.showsMenuAsPrimaryAction=YES;
+        [bar addSubview:button];
+        objc_setAssociatedObject(bar,&postTranslateButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGFloat w=MIN(gap,36);button.hidden=NO;
+    button.frame=CGRectMake(start+(gap-w)/2,(CGRectGetHeight(bar.bounds)-28)/2,w,28);
+}
+%group XPostActions
+%hook MXPostActionsView
+- (void)layoutSubviews {
+    UIView *bar=(UIView *)self;
+    for (UIView *child in bar.subviews) {
+        NSArray<NSValue *> *saved=objc_getAssociatedObject(child,&postOriginalFrame);
+        if (!saved) continue;
+        if (CGRectEqualToRect(child.frame,saved[1].CGRectValue)) child.frame=saved[0].CGRectValue;
+        objc_setAssociatedObject(child,&postOriginalFrame,nil,OBJC_ASSOCIATION_ASSIGN);
+    }
+    %orig;
+    updatePostBar(bar);
+}
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *bar=(UIView *)self;
+    UIButton *button=objc_getAssociatedObject(self,&postTranslateButton);
+    if (button && bar.userInteractionEnabled && !bar.hidden && bar.alpha>0.01 && !button.hidden && CGRectContainsPoint(button.frame,point)) return button;
+    return %orig;
+}
+%end
+%end
+
 %ctor {
     twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
     if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
         engine=[ConversationTranslator new];
         %init;
+        Class postBar=NSClassFromString(@"TTAStatusInlineActionsView");
+        if (twitter && postBar) { %init(XPostActions, MXPostActionsView=postBar); }
         Class xSend=NSClassFromString(@"ChatMessageComposer.ComposerActionAccessoryButton");
         if (twitter && xSend) { %init(XComposerSend, MXComposerSendButton=xSend); }
         if (!twitter && NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }

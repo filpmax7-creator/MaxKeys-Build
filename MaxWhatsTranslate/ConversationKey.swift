@@ -25,3 +25,26 @@ public func conversationKey(_ raw: UnsafeRawPointer) -> UnsafeMutableRawPointer?
     let hash = SHA256.hash(data: Data(stable.utf8)).map { String(format: "%02x", $0) }.joined()
     return Unmanaged.passRetained(("twitter.dm.swift." + hash) as NSString).toOpaque()
 }
+
+
+@_cdecl("MXOutgoingMessage")
+public func outgoingMessage(_ raw: UnsafeRawPointer) -> Int32 {
+    let holder = Unmanaged<AnyObject>.fromOpaque(raw).takeUnretainedValue()
+    func inspect(_ value: Any, depth: Int) -> Int32 {
+        guard depth < 5 else { return -1 }
+        let mirror = Mirror(reflecting: value)
+        for child in mirror.children {
+            let key = child.label ?? ""
+            if ["isOutgoing","isMine","isFromMe","isSentByMe","isSender","isCurrentUser","isOwnMessage","isIncoming"].contains(key),
+               let flag = child.value as? Bool {
+                return (key == "isIncoming" ? !flag : flag) ? 1 : 0
+            }
+        }
+        for child in mirror.children where mirror.displayStyle == .optional || ["message","viewModel","configuration","direction","deliveryDirection"].contains(child.label ?? "") {
+            let result = inspect(child.value, depth: depth + 1)
+            if result >= 0 { return result }
+        }
+        return -1
+    }
+    return inspect(holder, depth: 0)
+}
