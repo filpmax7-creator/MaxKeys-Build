@@ -16,15 +16,7 @@ static UIViewController *controller(UIView *view) {
     return nil;
 }
 static char xSession;
-static UIViewController *xSessionOwner(UIViewController *vc) {
-    UIViewController *composer=nil;
-    for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
-        NSString *name=NSStringFromClass(screen.class).lowercaseString;
-        if ([name isEqual:@"chatmessagecomposer.messagecomposerviewcontroller"]) composer=screen;
-        if ([name containsString:@"dmconversation"] || [name containsString:@"xchatconversation"] || [name containsString:@"dmthread"]) return screen;
-    }
-    return composer;
-}
+extern "C" void *MXCopyConversationKey(const void *screen);
 static NSString *chatID(UIViewController *vc) {
     if (twitter) {
         for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
@@ -38,14 +30,16 @@ static NSString *chatID(UIViewController *vc) {
                     return [@"twitter.dm." stringByAppendingString:identifier];
             }
         }
-        UIViewController *owner=xSessionOwner(vc);
-        if (!owner || !owner.viewIfLoaded.window) return nil;
-        NSString *key=objc_getAssociatedObject(owner,&xSession);
-        if (!key) {
-            key=[@"twitter.session." stringByAppendingString:NSUUID.UUID.UUIDString];
-            objc_setAssociatedObject(owner,&xSession,key,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        for (UIViewController *screen=vc; screen; screen=screen.parentViewController) {
+            if (![NSStringFromClass(screen.class) isEqual:@"DMConversation.ConversationViewController"]) continue;
+            NSString *key=objc_getAssociatedObject(screen,&xSession);
+            if (!key) {
+                key=CFBridgingRelease(MXCopyConversationKey((__bridge const void *)screen));
+                if (key) objc_setAssociatedObject(screen,&xSession,key,OBJC_ASSOCIATION_COPY_NONATOMIC);
+            }
+            return key;
         }
-        return key;
+        return nil;
     }
     id session = property(vc, @"chatSession");
     for (NSString *key in @[@"contactJID", @"jid", @"chatJID"]) {
@@ -56,7 +50,7 @@ static NSString *chatID(UIViewController *vc) {
     return nil;
 }
 static BOOL translationAllowed(NSString *chat) {
-    return !twitter || (chat.length && [NSUserDefaults.standardUserDefaults boolForKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]]);
+    return (!twitter && chat.length && ([NSUserDefaults.standardUserDefaults objectForKey:[@"MaxWhatsTranslate.target." stringByAppendingString:chat]] || [NSUserDefaults.standardUserDefaults objectForKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:chat]])) || (chat.length && [NSUserDefaults.standardUserDefaults boolForKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]]);
 }
 static NSString *setting(NSString *chat) {
     if (!translationAllowed(chat)) return nil;
@@ -88,17 +82,12 @@ static void installMenu(UIViewController *vc) {
 
     NSMutableArray *groups=[NSMutableArray new];
     if (!translationAllowed(chat)) {
-        [groups addObject:[UIAction actionWithTitle:@"تفعيل الترجمة عبر Google" image:nil identifier:nil handler:^(__unused UIAction *sender){
-            UIAlertController *dialog=[UIAlertController alertControllerWithTitle:@"ترجمة هذه المحادثة" message:@"سيُرسل نص الرسائل الواردة والمسودات عند الإرسال إلى Google للترجمة. يمكنك إيقافها من هذه القائمة." preferredStyle:UIAlertControllerStyleAlert];
-            [dialog addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
-            [dialog addAction:[UIAlertAction actionWithTitle:@"تفعيل لهذه المحادثة" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *selection){
-                if (![chatID(weakVC) isEqual:chat]) return;
-                [NSUserDefaults.standardUserDefaults setBool:YES forKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]];
-                [engine setLanguage:@"en" forChat:chat];
-                installMenu(weakVC);
-                refreshViews(weakVC.view);
-            }]];
-            [weakVC presentViewController:dialog animated:YES completion:nil];
+        [groups addObject:[UIAction actionWithTitle:@"تفعيل الترجمة" image:nil identifier:nil handler:^(__unused UIAction *sender){
+            if (![chatID(weakVC) isEqual:chat]) return;
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:[@"MaxTranslate.X.Google." stringByAppendingString:chat]];
+            [engine setLanguage:@"en" forChat:chat];
+            installMenu(weakVC);
+            refreshViews(weakVC.view);
         }]];
     } else {
     for (NSNumber *direction in @[@NO,@YES]) {
@@ -127,7 +116,7 @@ static void installMenu(UIViewController *vc) {
         showIncomingReport(weakVC);
     }]];
     }
-    UIMenu *menu=[UIMenu menuWithTitle:@"ترجمة المحادثة عبر Google" children:groups];
+    UIMenu *menu=[UIMenu menuWithTitle:@"ترجمة المحادثة" children:groups];
     if (!button) {
         button=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"globe"] menu:menu];
         button.accessibilityLabel=@"لغة ترجمة المحادثة";
@@ -143,133 +132,12 @@ static UITextView *activeEditor(UIView *root) {
     }
     return nil;
 }
-static char xLauncher;
-static BOOL isDMComposer(UIView *editor) {
-    for (UIResponder *r=editor; r && ![r isKindOfClass:UIWindow.class]; r=r.nextResponder) {
-        NSString *name=NSStringFromClass(r.class).lowercaseString;
-        if ([name containsString:@"directmessage"] || [name containsString:@"dmconversation"] ||
-            [name containsString:@"dmcomposer"] || [name containsString:@"dmthread"] ||
-            [name containsString:@"xchatconversation"]) return YES;
-    }
-    return NO;
-}
-static char xPanel;
-static void closeXPanel(UIButton *button) {
-    [objc_getAssociatedObject(button,&xPanel) removeFromSuperview];
-    objc_setAssociatedObject(button,&xPanel,nil,OBJC_ASSOCIATION_ASSIGN);
-}
-static void xRow(UIStackView *stack, NSString *title, void (^tap)(void)) {
-    UIButton *item=[UIButton buttonWithType:UIButtonTypeSystem];
-    [item setTitle:title forState:UIControlStateNormal];
-    [item.heightAnchor constraintEqualToConstant:44].active=YES;
-    [item addAction:[UIAction actionWithHandler:^(__unused UIAction *a){tap();}] forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:item];
-}
-static void openXPanel(UITextView *editor,UIButton *button,int page) {
-    closeXPanel(button);
-    UIWindow *window=button.window;
-    if (!window) return;
-    UIViewController *vc=controller(editor);
-    NSString *key=chatID(vc);
-    UIScrollView *panel=[UIScrollView new];
-    panel.backgroundColor=UIColor.secondarySystemBackgroundColor;
-    panel.layer.cornerRadius=14;
-    panel.translatesAutoresizingMaskIntoConstraints=NO;
-    UIStackView *rows=[UIStackView new];
-    rows.axis=UILayoutConstraintAxisVertical;
-    rows.translatesAutoresizingMaskIntoConstraints=NO;
-    [panel addSubview:rows];
-    [window addSubview:panel];
-    objc_setAssociatedObject(button,&xPanel,panel,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    __weak UIButton *anchor=button;
-    __weak UITextView *field=editor;
-    if (!key.length) xRow(rows,@"تعذّر تحديد المحادثة",^{closeXPanel(anchor);});
-    else if (!translationAllowed(key)) xRow(rows,@"تفعيل الترجمة عبر Google",^{
-        if (![chatID(controller(field)) isEqual:key]) {closeXPanel(anchor);return;}
-        [NSUserDefaults.standardUserDefaults setBool:YES forKey:[@"MaxTranslate.X.Google." stringByAppendingString:key]];
-        [engine setLanguage:@"en" forChat:key];
-        openXPanel(field,anchor,0);
-        refreshViews(controller(field).view);
-    });
-    else if (!page) {
-        xRow(rows,@"لغة الوارد",^{openXPanel(field,anchor,1);});
-        xRow(rows,@"لغة الصادر",^{openXPanel(field,anchor,2);});
-        xRow(rows,@"إيقاف الترجمة",^{
-            if ([chatID(controller(field)) isEqual:key])
-                for (NSString *prefix in @[@"MaxTranslate.X.Google.",@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target."])
-                    [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:key]];
-            closeXPanel(anchor);refreshViews(controller(field).view);
-        });
-    } else {
-        NSDictionary *names=@{@"en":@"\u0627\u0644\u0625\u0646\u062c\u0644\u064a\u0632\u064a\u0629",@"tr":@"\u0627\u0644\u062a\u0631\u0643\u064a\u0629",@"ar":@"\u0627\u0644\u0639\u0631\u0628\u064a\u0629",@"fr":@"\u0627\u0644\u0641\u0631\u0646\u0633\u064a\u0629",@"de":@"\u0627\u0644\u0623\u0644\u0645\u0627\u0646\u064a\u0629",@"es":@"\u0627\u0644\u0625\u0633\u0628\u0627\u0646\u064a\u0629",@"ru":@"\u0627\u0644\u0631\u0648\u0633\u064a\u0629",@"zh-CN":@"\u0627\u0644\u0635\u064a\u0646\u064a\u0629",@"ur":@"\u0627\u0644\u0623\u0631\u062f\u064a\u0629",@"hi":@"\u0627\u0644\u0647\u0646\u062f\u064a\u0629",@"id":@"\u0627\u0644\u0625\u0646\u062f\u0648\u0646\u064a\u0633\u064a\u0629"};
-        for (NSString *code in [[names allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
-            NSString *current=page==1 ? incomingLanguage(key) : setting(key);
-            xRow(rows,[current isEqual:code] ? [@"✓ " stringByAppendingString:names[code]] : names[code],^{
-                if (![chatID(controller(field)) isEqual:key]) {closeXPanel(anchor);return;}
-                if(page==1)[NSUserDefaults.standardUserDefaults setObject:code forKey:[@"MaxWhatsTranslate.incoming." stringByAppendingString:key]];
-                else [engine setLanguage:code forChat:key];
-                openXPanel(field,anchor,0);refreshViews(controller(field).view);
-            });
-        }
-    }
-    xRow(rows,@"إغلاق",^{closeXPanel(anchor);});
-    CGFloat available=CGRectGetMinY(button.frame)-window.safeAreaInsets.top-8;
-    [NSLayoutConstraint activateConstraints:@[[panel.centerXAnchor constraintEqualToAnchor:window.centerXAnchor],
-        [panel.widthAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.widthAnchor multiplier:0.85],
-        [panel.bottomAnchor constraintEqualToAnchor:button.topAnchor constant:-2],
-        [panel.heightAnchor constraintEqualToConstant:MIN(rows.arrangedSubviews.count*44,MAX(44,available))],
-        [rows.widthAnchor constraintEqualToAnchor:panel.frameLayoutGuide.widthAnchor],
-        [rows.leadingAnchor constraintEqualToAnchor:panel.contentLayoutGuide.leadingAnchor],
-        [rows.trailingAnchor constraintEqualToAnchor:panel.contentLayoutGuide.trailingAnchor],
-        [rows.topAnchor constraintEqualToAnchor:panel.contentLayoutGuide.topAnchor],
-        [rows.bottomAnchor constraintEqualToAnchor:panel.contentLayoutGuide.bottomAnchor]]];
-}
-static void updateXComposer(UITextView *editor) {
-    UIButton *old=objc_getAssociatedObject(editor,&xLauncher);
-    UIViewController *vc=controller(editor);
-    NSString *chat=chatID(vc);
-    if (!editor.window || !editor.isFirstResponder || !editor.editable || (!isDMComposer(editor) && !chat.length)) {
-        if (old) closeXPanel(old);
-        [old removeFromSuperview];
-        objc_setAssociatedObject(editor,&xLauncher,nil,OBJC_ASSOCIATION_ASSIGN);
-        return;
-    }
-    if (old && old.superview==editor.window) return;
-    if (!vc || ![editor isDescendantOfView:vc.view]) return;
-    if (old) closeXPanel(old);
-        [old removeFromSuperview];
-    UIButton *button=[UIButton buttonWithType:UIButtonTypeSystem];
-    button.accessibilityLabel=@"ترجمة هذه المحادثة";
-    button.backgroundColor=UIColor.secondarySystemBackgroundColor;
-    button.layer.cornerRadius=18;
-    [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
-    __weak UITextView *field=editor;
-    __weak UIButton *anchor=button;
-    [button addAction:[UIAction actionWithHandler:^(__unused UIAction *action){
-        if (objc_getAssociatedObject(anchor,&xPanel)) closeXPanel(anchor);
-        else openXPanel(field,anchor,0);
-    }] forControlEvents:UIControlEventTouchUpInside];
-    UIWindow *window=editor.window;
-    [window addSubview:button];
-    button.translatesAutoresizingMaskIntoConstraints=NO;
-    [NSLayoutConstraint activateConstraints:@[[button.trailingAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.trailingAnchor constant:-8],
-        [button.bottomAnchor constraintEqualToAnchor:editor.topAnchor constant:-4],
-        [button.widthAnchor constraintEqualToConstant:44],[button.heightAnchor constraintEqualToConstant:44]]];
-    objc_setAssociatedObject(editor,&xLauncher,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
 %hook UIViewController
-- (void)viewDidDisappear:(BOOL)animated {
-    %orig;
-    NSString *key=objc_getAssociatedObject(self,&xSession);
-    if (key && !self.presentedViewController) {
-        for (NSString *prefix in @[@"MaxTranslate.X.Google.",@"MaxWhatsTranslate.incoming.",@"MaxWhatsTranslate.target."])
-            [NSUserDefaults.standardUserDefaults removeObjectForKey:[prefix stringByAppendingString:key]];
-        objc_setAssociatedObject(self,&xSession,nil,OBJC_ASSOCIATION_ASSIGN);
-    }
-}
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!twitter) installMenu(self);
+    if (twitter && ![NSStringFromClass(self.class) isEqual:@"DMConversation.ConversationViewController"]) return;
+    if (twitter) objc_setAssociatedObject(self,&xSession,nil,OBJC_ASSOCIATION_ASSIGN);
+    installMenu(self);
 }
 %end
 %hook UIControl
@@ -448,8 +316,8 @@ static void translateView(UIView *view) {
 - (void)layoutSubviews { %orig; translateView(self); }
 %end
 %hook UITextView
-- (void)didMoveToWindow { %orig; if (twitter) updateXComposer(self); }
-- (void)layoutSubviews { %orig; if (twitter && self.isFirstResponder) updateXComposer(self); translateView(self); }
+
+- (void)layoutSubviews { %orig; translateView(self); }
 %end
 
 // WhatsApp draws this text slice itself. Give its translation a separate view.
@@ -570,13 +438,6 @@ static void updateSlice(UIView *slice) {
 %ctor {
     twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
     if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
-        if (twitter) {
-            for (NSString *event in @[UITextViewTextDidBeginEditingNotification,UITextViewTextDidEndEditingNotification]) {
-                [NSNotificationCenter.defaultCenter addObserverForName:event object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){
-                    if ([n.object isKindOfClass:UITextView.class]) updateXComposer(n.object);
-                }];
-            }
-        }
         engine=[ConversationTranslator new];
         %init;
         Class xSend=NSClassFromString(@"ChatMessageComposer.ComposerActionAccessoryButton");
