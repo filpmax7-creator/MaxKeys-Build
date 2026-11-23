@@ -526,8 +526,8 @@ static void updateSlice(UIView *slice) {
 %hook MXComposerSendButton
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit=%orig;
-    if (!hit || !self.enabled) return hit;
-    NSString *role=self.accessibilityLabel.lowercaseString;
+    UIButton *sendButton=(UIButton *)self; if (!hit || !sendButton.enabled) return hit;
+    NSString *role=sendButton.accessibilityLabel.lowercaseString;
     if (![role isEqual:@"إرسال"] && ![role isEqual:@"send"] && ![role isEqual:@"send message"]) return self;
     UIViewController *owner=controller(self);
     UITextView *editor=activeEditor(owner.view);
@@ -539,7 +539,7 @@ static void updateSlice(UIView *slice) {
     if (!proxy) {
         proxy=[UIButton buttonWithType:UIButtonTypeCustom];
         proxy.isAccessibilityElement=NO;
-        proxy.frame=self.bounds;
+        proxy.frame=sendButton.bounds;
         proxy.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         __weak UIControl *original=self;
         [proxy addAction:[UIAction actionWithHandler:^(__unused UIAction *action){
