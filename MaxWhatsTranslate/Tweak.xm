@@ -546,53 +546,44 @@ static UIMenu *postMenu(UIView *bar) {
 static void updatePostBar(UIView *bar) {
     if (!bar.window || CGRectGetWidth(bar.bounds)<120) return;
     UIButton *button=objc_getAssociatedObject(bar,&postTranslateButton);
+    UIView *host=bar.superview;
+    for (UIView *v=host;v;v=v.superview) {
+        if ([v isKindOfClass:UITableViewCell.class]) {host=((UITableViewCell *)v).contentView;break;}
+        if ([v isKindOfClass:UICollectionViewCell.class]) {host=((UICollectionViewCell *)v).contentView;break;}
+    }
+    if (!host) return;
+    CGRect row=[bar convertRect:bar.bounds toView:host];
+    CGFloat size=44;
+    CGFloat centerY=MIN(MAX(CGRectGetMidY(row),size/2),CGRectGetMaxY(host.bounds)-size/2);
+    CGRect slot=CGRectMake(CGRectGetMaxX(host.bounds)-size-2,centerY-size/2,size,size);
+    CGFloat limit=CGRectGetMinX([host convertRect:slot toView:bar])-4;
     CGFloat width=CGRectGetWidth(bar.bounds);
     CGFloat glyph=MIN(19,MAX(12,CGRectGetHeight(bar.bounds)-1));
-    NSMutableArray<UIView *> *items=[NSMutableArray new];
-    for (UIView *child in bar.subviews) {
-        if (child==button || child.hidden || child.alpha<0.01 || CGRectIsEmpty(child.frame)) continue;
-        [items addObject:child];
-    }
-    [items sortUsingComparator:^NSComparisonResult(UIView *a,UIView *b){
-        return [@(CGRectGetMinX(a.frame)) compare:@(CGRectGetMinX(b.frame))];
-    }];
-    CGFloat slot=glyph+6, start=0, gap=0, end=0;
-    for (UIView *child in items) {
-        CGFloat x=CGRectGetMinX(child.frame);
-        if (x-end>gap) {start=end;gap=x-end;}
-        end=MAX(end,CGRectGetMaxX(child.frame));
-    }
-    if (width-end>gap) {start=end;gap=width-end;}
-    if (gap<slot) {
-        CGFloat used=0;
-        for (UIView *child in items) used+=CGRectGetWidth(child.frame);
-        CGFloat spacing=(width-used-slot)/MAX((CGFloat)items.count,1.0);
-        if (spacing<1) {button.hidden=YES;return;}
-        CGFloat x=0;
-        for (UIView *child in items) {
-            CGRect before=child.frame,after=before;
-            after.origin.x=x;
-            x+=CGRectGetWidth(after)+spacing;
-            if (!CGRectEqualToRect(before,after)) {
-                objc_setAssociatedObject(child,&postOriginalFrame,@[[NSValue valueWithCGRect:before],[NSValue valueWithCGRect:after]],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                child.frame=after;
-            }
+    if (limit<width && limit>0) {
+        CGFloat factor=limit/width;
+        for (UIView *child in bar.subviews) {
+            if (child==button || child.hidden) continue;
+            CGRect before=child.frame, after=before;
+            after.origin.x*=factor;
+            after.size.width*=factor;
+            objc_setAssociatedObject(child,&postOriginalFrame,@[[NSValue valueWithCGRect:before],[NSValue valueWithCGRect:after]],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            child.frame=after;
         }
-        start=width-slot;gap=slot;
     }
     if (!button) {
         button=[UIButton buttonWithType:UIButtonTypeSystem];
         [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
         button.accessibilityLabel=@"ترجمة التغريدة";
         button.menu=postMenu(bar);button.showsMenuAsPrimaryAction=YES;
-        [bar addSubview:button];
+        [host addSubview:button];
         objc_setAssociatedObject(bar,&postTranslateButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     button.tintColor=UIColor.secondaryLabelColor;
     [button setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:glyph-1 weight:UIImageSymbolWeightRegular] forImageInState:UIControlStateNormal];
     button.hidden=NO;
-    CGFloat w=MIN(gap,slot+4);
-    button.frame=CGRectMake(start+(gap-w)/2,(CGRectGetHeight(bar.bounds)-24)/2,w,24);
+    if (button.superview!=host) [host addSubview:button];
+    button.frame=slot;
+    [host bringSubviewToFront:button];
 }
 %group XPostActions
 %hook MXPostActionsView
@@ -607,11 +598,18 @@ static void updatePostBar(UIView *bar) {
     %orig;
     updatePostBar(bar);
 }
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+- (void)willMoveToSuperview:(UIView *)next {
+    if (next!=[(UIView *)self superview]) {
+        UIButton *button=objc_getAssociatedObject(self,&postTranslateButton);
+        [button removeFromSuperview];
+    }
+    %orig;
+}
+- (void)didMoveToWindow {
+    %orig;
     UIView *bar=(UIView *)self;
-    UIButton *button=objc_getAssociatedObject(self,&postTranslateButton);
-    if (button && bar.userInteractionEnabled && !bar.hidden && bar.alpha>0.01 && !button.hidden && CGRectContainsPoint(button.frame,point)) return button;
-    return %orig;
+    if (bar.window) [bar setNeedsLayout];
+    else [(UIButton *)objc_getAssociatedObject(bar,&postTranslateButton) removeFromSuperview];
 }
 %end
 %end
