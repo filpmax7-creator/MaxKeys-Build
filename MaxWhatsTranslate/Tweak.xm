@@ -520,6 +520,53 @@ static void updateSlice(UIView *slice) {
 - (void)didMoveToWindow { %orig; updateSlice((UIView *)self); }
 %end
 %end
+@interface MXComposerSendButton : UIButton
+@end
+%group XComposerSend
+%hook MXComposerSendButton
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit=%orig;
+    if (!hit || !self.enabled) return hit;
+    NSString *role=self.accessibilityLabel.lowercaseString;
+    if (![role isEqual:@"إرسال"] && ![role isEqual:@"send"] && ![role isEqual:@"send message"]) return self;
+    UIViewController *owner=controller(self);
+    UITextView *editor=activeEditor(owner.view);
+    NSString *chat=chatID(controller(editor));
+    NSString *language=setting(chat);
+    if (!editor.text.length || !language.length) return self;
+    static char proxyKey;
+    UIButton *proxy=objc_getAssociatedObject(self,&proxyKey);
+    if (!proxy) {
+        proxy=[UIButton buttonWithType:UIButtonTypeCustom];
+        proxy.isAccessibilityElement=NO;
+        proxy.frame=self.bounds;
+        proxy.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        __weak UIControl *original=self;
+        [proxy addAction:[UIAction actionWithHandler:^(__unused UIAction *action){
+            UIControl *sender=original;
+            UITextView *field=activeEditor(controller(sender).view);
+            NSString *key=chatID(controller(field));
+            NSString *target=setting(key);
+            NSString *draft=[field.text copy];
+            if (!draft.length || !target.length || objc_getAssociatedObject(field,&sending)) return;
+            objc_setAssociatedObject(field,&sending,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [engine translateDraft:draft chat:key completion:^(NSString *result){
+                objc_setAssociatedObject(field,&sending,nil,OBJC_ASSOCIATION_ASSIGN);
+                if (!sender.window || !field.isFirstResponder || ![field.text isEqual:draft] ||
+                    ![chatID(controller(field)) isEqual:key] || ![setting(key) isEqual:target]) return;
+                if (!result.length) { note(controller(field),@"تعذّرت الترجمة. المسودة محفوظة."); return; }
+                [field replaceRange:[field textRangeFromPosition:field.beginningOfDocument toPosition:field.endOfDocument] withText:result];
+                if ([field.text isEqual:result]) [sender sendActionsForControlEvents:UIControlEventTouchUpInside];
+            }];
+        }] forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:proxy];
+        objc_setAssociatedObject(self,&proxyKey,proxy,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return proxy;
+}
+%end
+%end
+
 %ctor {
     twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
     if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
@@ -532,6 +579,8 @@ static void updateSlice(UIView *slice) {
         }
         engine=[ConversationTranslator new];
         %init;
+        Class xSend=NSClassFromString(@"ChatMessageComposer.ComposerActionAccessoryButton");
+        if (twitter && xSend) { %init(XComposerSend, MXComposerSendButton=xSend); }
         if (!twitter && NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }
     }
 }
