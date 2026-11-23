@@ -343,8 +343,7 @@ static void updateSlice(UIView *slice) {
         if (old && old.superview==slice) [slice bringSubviewToFront:old];
         return;
     }
-    if (old) closeXPanel(old);
-        [old removeFromSuperview];
+    [old removeFromSuperview];
     objc_setAssociatedObject(slice,&sliceButton,nil,OBJC_ASSOCIATION_ASSIGN);
     objc_setAssociatedObject(slice,&sliceRequest,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!key) return;
