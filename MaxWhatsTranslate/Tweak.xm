@@ -459,29 +459,53 @@ static NSString *postString(id value) {
     if ([value isKindOfClass:NSAttributedString.class]) value=[value string];
     return [value isKindOfClass:NSString.class] && [value length] ? value : nil;
 }
-static NSString *postText(UIView *bar) {
-    for (UIView *v=bar; v; v=v.superview) {
-        id status=property(v,@"status") ?: property(property(v,@"viewModel"),@"status");
-        NSString *text=postString(property(status,@"fullText")) ?: postString(property(status,@"text"));
-        if (text) return text;
-        if ([NSStringFromClass(v.class) containsString:@"StandardStatusView"]) {
-            for (NSString *key in @[@"statusTextView",@"tweetTextView",@"textView",@"bodyTextView"]) {
-                id body=property(v,key);
-                text=postString(property(body,@"attributedText")) ?: postString(property(body,@"text"));
-                if (text) return text;
-            }
-            NSMutableArray *queue=[v.subviews mutableCopy];
-            for (NSUInteger i=0;i<queue.count;i++) {
-                UIView *child=queue[i]; NSString *name=NSStringFromClass(child.class).lowercaseString;
-                if ([name containsString:@"quote"] || [name containsString:@"card"] || [name containsString:@"header"] || child==bar) continue;
-                if ([name isEqual:@"ttastatusbodyattributedtextview"] || [name containsString:@"tweettext"] || [name containsString:@"statustext"]) {
-                    text=postString(property(child,@"attributedText")) ?: postString(property(child,@"text"));
-                    if (text) return text;
-                }
-                [queue addObjectsFromArray:child.subviews];
-            }
+static NSString *postModelText(id owner) {
+    id model=property(owner,@"viewModel");
+    id status=property(owner,@"status") ?: property(model,@"status") ?: property(model,@"tweet");
+    for (id source in @[status ?: NSNull.null,model ?: NSNull.null]) {
+        for (NSString *field in @[@"fullText",@"attributedBodyText",@"bodyText",@"text"]) {
+            NSString *text=postString(property(source,field));
+            if (text.length) return text;
         }
-        if ([v isKindOfClass:UITableViewCell.class]) break;
+    }
+    return nil;
+}
+static NSString *localPostBody(UIView *root) {
+    NSMutableArray *queue=[NSMutableArray arrayWithObject:root];
+    for (NSUInteger i=0;i<queue.count;i++) {
+        UIView *child=queue[i];
+        NSString *name=NSStringFromClass(child.class).lowercaseString;
+        if (child.hidden || [name containsString:@"quote"] || [name containsString:@"card"] || [name containsString:@"attachment"] ||
+            [name containsString:@"header"] || [name containsString:@"author"] || [name containsString:@"action"] ||
+            (child!=root && ([child isKindOfClass:UITableViewCell.class] || [child isKindOfClass:UICollectionViewCell.class]))) continue;
+        if ([name containsString:@"bodytext"] || [name containsString:@"bodyattributedtext"] || [name containsString:@"bodyselectablecontenttext"] || [name containsString:@"tweettext"] || [name containsString:@"statustext"]) {
+            NSString *text=postString(property(child,@"attributedText")) ?: postString(property(child,@"text")) ?: postModelText(child);
+            if (text.length) return text;
+        }
+        [queue addObjectsFromArray:child.subviews];
+    }
+    return nil;
+}
+static NSString *postText(UIView *bar) {
+    BOOL detail=NO;
+    for (UIView *v=bar;v;v=v.superview) {
+        if ([v isKindOfClass:UITableView.class] || [v isKindOfClass:UICollectionView.class] || [v isKindOfClass:UIWindow.class]) break;
+        NSString *name=NSStringFromClass(v.class).lowercaseString;
+        detail|=[name containsString:@"focal"] || [name containsString:@"detail"];
+        NSString *text=postModelText(v);
+        if (text.length) return text;
+        BOOL cell=[v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class];
+        if (cell || [name containsString:@"statusview"] || detail) {
+            text=localPostBody(v);
+            if (text.length) return text;
+        }
+        if (cell) break;
+    }
+    if (detail) {
+        for (UIViewController *vc=controller(bar); vc; vc=vc.parentViewController) {
+            NSString *text=postModelText(vc);
+            if (text.length) return text;
+        }
     }
     return nil;
 }
@@ -522,34 +546,39 @@ static UIMenu *postMenu(UIView *bar) {
 static void updatePostBar(UIView *bar) {
     if (!bar.window || CGRectGetWidth(bar.bounds)<120) return;
     UIButton *button=objc_getAssociatedObject(bar,&postTranslateButton);
-    NSMutableArray *occupied=[NSMutableArray new];
+    CGFloat width=CGRectGetWidth(bar.bounds);
+    CGFloat glyph=MIN(19,MAX(12,CGRectGetHeight(bar.bounds)-1));
+    NSMutableArray<UIView *> *items=[NSMutableArray new];
     for (UIView *child in bar.subviews) {
         if (child==button || child.hidden || child.alpha<0.01 || CGRectIsEmpty(child.frame)) continue;
-        [occupied addObject:[NSValue valueWithCGRect:child.frame]];
+        [items addObject:child];
     }
-    [occupied sortUsingComparator:^NSComparisonResult(NSValue *a,NSValue *b){
-        CGFloat x=CGRectGetMinX(a.CGRectValue),y=CGRectGetMinX(b.CGRectValue);
-        return x<y ? NSOrderedAscending : x>y ? NSOrderedDescending : NSOrderedSame;
+    [items sortUsingComparator:^NSComparisonResult(UIView *a,UIView *b){
+        return [@(CGRectGetMinX(a.frame)) compare:@(CGRectGetMinX(b.frame))];
     }];
-    CGFloat end=0,gap=0,start=0;
-    for (NSValue *value in occupied) {
-        CGRect r=value.CGRectValue;
-        if (CGRectGetMinX(r)-end>gap) {gap=CGRectGetMinX(r)-end;start=end;}
-        end=MAX(end,CGRectGetMaxX(r));
+    CGFloat slot=glyph+6, start=0, gap=0, end=0;
+    for (UIView *child in items) {
+        CGFloat x=CGRectGetMinX(child.frame);
+        if (x-end>gap) {start=end;gap=x-end;}
+        end=MAX(end,CGRectGetMaxX(child.frame));
     }
-    CGFloat width=CGRectGetWidth(bar.bounds);
-    if (width-end>gap) {gap=width-end;start=end;}
-    if (gap<28) {
-        CGFloat reserve=28, scale=(width-reserve)/width;
-        for (UIView *child in bar.subviews) {
-            if (child==button || child.hidden || CGRectIsEmpty(child.frame)) continue;
-            CGRect before=child.frame, after=before;
-            after.origin.x=before.origin.x*scale; after.size.width=before.size.width*scale;
-            if (CGRectGetMaxX(after)>width-reserve) after.origin.x=width-reserve-after.size.width;
-            objc_setAssociatedObject(child,&postOriginalFrame,@[[NSValue valueWithCGRect:before],[NSValue valueWithCGRect:after]],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            child.frame=after;
+    if (width-end>gap) {start=end;gap=width-end;}
+    if (gap<slot) {
+        CGFloat used=0;
+        for (UIView *child in items) used+=CGRectGetWidth(child.frame);
+        CGFloat spacing=(width-used-slot)/MAX((CGFloat)items.count,1.0);
+        if (spacing<1) {button.hidden=YES;return;}
+        CGFloat x=0;
+        for (UIView *child in items) {
+            CGRect before=child.frame,after=before;
+            after.origin.x=x;
+            x+=CGRectGetWidth(after)+spacing;
+            if (!CGRectEqualToRect(before,after)) {
+                objc_setAssociatedObject(child,&postOriginalFrame,@[[NSValue valueWithCGRect:before],[NSValue valueWithCGRect:after]],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                child.frame=after;
+            }
         }
-        gap=reserve;start=width-reserve;
+        start=width-slot;gap=slot;
     }
     if (!button) {
         button=[UIButton buttonWithType:UIButtonTypeSystem];
@@ -559,8 +588,11 @@ static void updatePostBar(UIView *bar) {
         [bar addSubview:button];
         objc_setAssociatedObject(bar,&postTranslateButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    CGFloat w=MIN(gap,36);button.hidden=NO;
-    button.frame=CGRectMake(start+(gap-w)/2,(CGRectGetHeight(bar.bounds)-28)/2,w,28);
+    button.tintColor=UIColor.secondaryLabelColor;
+    [button setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:glyph-1 weight:UIImageSymbolWeightRegular] forImageInState:UIControlStateNormal];
+    button.hidden=NO;
+    CGFloat w=MIN(gap,slot+4);
+    button.frame=CGRectMake(start+(gap-w)/2,(CGRectGetHeight(bar.bounds)-24)/2,w,24);
 }
 %group XPostActions
 %hook MXPostActionsView
@@ -596,3 +628,4 @@ static void updatePostBar(UIView *bar) {
         if (!twitter && NSClassFromString(@"WAMessageAttributedTextSliceView")) { %init(AttributedSlice); }
     }
 }
+
