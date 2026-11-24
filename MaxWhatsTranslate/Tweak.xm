@@ -142,6 +142,34 @@ static UITextView *activeEditor(UIView *root) {
 %end
 %hook UIControl
 - (void)sendAction:(SEL)action to:(id)target forEvent:(UIEvent *)event {
+    NSString *replyLanguage=[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.ReplyLanguage"];
+    if (twitter && replyLanguage.length && target && [self.accessibilityIdentifier isEqual:@"ComposeSendTweetButton"]) {
+        UITextView *editor=activeEditor(self.window);
+        UIResponder *context=editor;
+        while (context && ![context isKindOfClass:NSClassFromString(@"T1TweetComposeSingleTweetViewController")]) context=context.nextResponder;
+        if ([[context valueForKey:@"isReply"] boolValue] && editor.text.length) {
+            if (objc_getAssociatedObject(editor,&sending)) return;
+            NSString *draft=[editor.text copy];
+            objc_setAssociatedObject(editor,&sending,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            __weak UITextView *weakField=editor;
+            __weak UIControl *weakButton=self;
+            __weak id weakTarget=target;
+            [engine translateIncoming:draft target:replyLanguage completion:^(NSString *result){
+                UITextView *field=weakField;
+                UIControl *button=weakButton;
+                id receiver=weakTarget;
+                if (!field) return;
+                objc_setAssociatedObject(field,&sending,nil,OBJC_ASSOCIATION_ASSIGN);
+                if (!button.window || !receiver || !field.isFirstResponder || field.window!=button.window || ![field.text isEqual:draft] ||
+                    ![[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.ReplyLanguage"] isEqual:replyLanguage]) return;
+                if (!result.length) {note(controller(field),@"تعذّرت ترجمة الرد. مسودتك محفوظة.");return;}
+                UITextRange *range=[field textRangeFromPosition:field.beginningOfDocument toPosition:field.endOfDocument];
+                [field replaceRange:range withText:result];
+                if ([field.text isEqual:result]) [UIApplication.sharedApplication sendAction:action to:receiver from:button forEvent:nil];
+            }];
+            return;
+        }
+    }
     UIViewController *vc=controller(self);
     NSString *chat=chatID(vc);
     NSString *language=setting(chat);
@@ -528,6 +556,12 @@ static UIMenu *postMenu(UIView *bar) {
         NSString *language=[locale localizedStringForLanguageCode:target] ?: target;
         UIAction *translate=[UIAction actionWithTitle:[@"ترجمة إلى " stringByAppendingString:language] image:nil identifier:nil handler:^(__unused UIAction *a){ translatePost(weak,target); }];
         NSMutableArray *choices=[NSMutableArray new];
+        NSMutableArray *replyChoices=[NSMutableArray new];
+        NSUserDefaults *prefs=NSUserDefaults.standardUserDefaults;
+        NSString *reply=[prefs stringForKey:@"MaxTranslate.ReplyLanguage"];
+        UIAction *off=[UIAction actionWithTitle:@"إيقاف ترجمة الردود" image:nil identifier:nil handler:^(__unused UIAction *a){[prefs removeObjectForKey:@"MaxTranslate.ReplyLanguage"];}];
+        off.state=reply.length?UIMenuElementStateOff:UIMenuElementStateOn;
+        [replyChoices addObject:off];
         NSArray *codes=[NSLocale.ISOLanguageCodes sortedArrayUsingComparator:^NSComparisonResult(NSString *a,NSString *b){
             return [([locale localizedStringForLanguageCode:a] ?: a) localizedCaseInsensitiveCompare:([locale localizedStringForLanguageCode:b] ?: b)];
         }];
@@ -538,8 +572,11 @@ static UIMenu *postMenu(UIView *bar) {
             }];
             item.state=[code isEqual:target] ? UIMenuElementStateOn : UIMenuElementStateOff;
             [choices addObject:item];
+            UIAction *choice=[UIAction actionWithTitle:item.title image:nil identifier:nil handler:^(__unused UIAction *a){[prefs setObject:code forKey:@"MaxTranslate.ReplyLanguage"];}];
+            choice.state=[reply isEqual:code]?UIMenuElementStateOn:UIMenuElementStateOff;
+            [replyChoices addObject:choice];
         }
-        done(@[translate,[UIMenu menuWithTitle:@"لغة التغريدات" children:choices]]);
+        done(@[translate,[UIMenu menuWithTitle:@"لغة التغريدات" children:choices],[UIMenu menuWithTitle:@"لغة الردود" children:replyChoices]]);
     }];
     return [UIMenu menuWithTitle:@"ترجمة التغريدة" children:@[options]];
 }
