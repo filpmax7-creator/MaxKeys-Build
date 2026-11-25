@@ -711,6 +711,17 @@ static void updatePostBar(UIView *bar) {
 static char sileoItem, sileoRequest;
 extern "C" void *MXDepictionRoot(const void *);
 extern "C" void *MXDepictionText(const void *);
+static void collectRenderedMarkdown(UIView *view, BOOL inMarkdown, NSMutableArray<NSString *> *parts) {
+    if (view.hidden || view.alpha<0.01) return;
+    NSString *type=NSStringFromClass(view.class);
+    inMarkdown=inMarkdown || [type containsString:@"DepictionMarkdownView"];
+    if (inMarkdown && [type hasSuffix:@"CSTextRenderView"]) {
+        NSString *text=[view.accessibilityLabel stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (text.length) [parts addObject:text];
+        return;
+    }
+    for (UIView *child in view.subviews) collectRenderedMarkdown(child,inMarkdown,parts);
+}
 static void collectDescription(UIView *view, BOOL body, NSMutableArray *parts) {
     if (view.hidden || view.alpha<0.01) return;
     NSString *type=NSStringFromClass(view.class).lowercaseString;
@@ -763,6 +774,11 @@ static void readSileoPage(UIViewController *page, NSString *code) {
     NSObject *token=[NSObject new];
     objc_setAssociatedObject(page,&sileoRequest,token,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSMutableArray *parts=[NSMutableArray new];
+    collectRenderedMarkdown(page.view,NO,parts);
+    if (parts.count) {
+        showSileoText(page,[parts componentsJoinedByString:@"\n\n"],code,token);
+        return;
+    }
     UIView *root=CFBridgingRelease(MXDepictionRoot((__bridge const void *)page));
     if (root && [root isDescendantOfView:page.view]) collectDescription(root,YES,parts);
     else collectDescription(page.view,NO,parts);
