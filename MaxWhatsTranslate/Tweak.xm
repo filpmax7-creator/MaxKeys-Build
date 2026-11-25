@@ -220,6 +220,10 @@ static NSNumber *deliveryDirection(id owner) {
     return nil;
 }
 static id messageIn(id owner) {
+    if (!twitter && [owner isKindOfClass:NSClassFromString(@"WAMessageBubbleTableViewCell")]) {
+        id message=property(owner,@"focusedMessage");
+        if (deliveryDirection(message)) return message;
+    }
     for (id holder in @[owner ?: NSNull.null, property(owner,@"cellData") ?: NSNull.null,
                          property(owner,@"viewModel") ?: NSNull.null, property(owner,@"messageData") ?: NSNull.null, property(owner,@"messageViewModel") ?: NSNull.null]) {
         for (NSString *key in @[@"message",@"waMessage",@"messageObject",@"directMessage",@"dmMessage"]) {
