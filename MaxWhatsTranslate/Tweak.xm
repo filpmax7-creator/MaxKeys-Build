@@ -709,17 +709,25 @@ static void updatePostBar(UIView *bar) {
 %end
 
 static char sileoItem, sileoRequest;
-static void collectDescription(UIView *view, BOOL body, NSMutableArray *parts, NSMutableArray *pages) {
-    if (view.hidden || view.alpha<0.01 || [view isKindOfClass:UIControl.class]) return;
+static void collectDescription(UIView *view, BOOL body, NSMutableArray *parts) {
+    if (view.hidden || view.alpha<0.01) return;
     NSString *type=NSStringFromClass(view.class).lowercaseString;
-    body=body || [type containsString:@"markdown"] || [type containsString:@"depictionlabel"] || [type containsString:@"descriptionview"];
-    if ([view isKindOfClass:WKWebView.class]) { [pages addObject:view]; return; }
+    if ([view isKindOfClass:WKWebView.class]) { [parts addObject:view]; return; }
+    body=body || [type containsString:@"markdown"] || [type containsString:@"depictionlabel"] || [type containsString:@"descriptionview"] || [type containsString:@"depictiontext"];
     if (body) {
-        id value=property(view,@"attributedText") ?: property(view,@"text");
+        id value=property(view,@"attributedText") ?: property(view,@"attributedString") ?: property(view,@"text");
         if ([value isKindOfClass:NSAttributedString.class]) value=[value string];
         if ([value isKindOfClass:NSString.class] && [value length]) { [parts addObject:value]; return; }
     }
-    for (UIView *child in view.subviews) collectDescription(child,body,parts,pages);
+    for (UIView *child in view.subviews) collectDescription(child,body,parts);
+}
+static void translateSections(NSArray *chunks, NSUInteger index, NSString *code, NSMutableArray *output, void (^done)(NSString *)) {
+    if (index==chunks.count) { done([output componentsJoinedByString:@"\n\n"]); return; }
+    [engine translateIncoming:chunks[index] target:code completion:^(NSString *result){
+        if (!result.length) { done(nil); return; }
+        [output addObject:result];
+        dispatch_async(dispatch_get_main_queue(), ^{translateSections(chunks,index+1,code,output,done);});
+    }];
 }
 static void showSileoText(UIViewController *vc, NSString *body, NSString *code, NSObject *token) {
     if (!vc.view.window || vc.navigationController.topViewController!=vc || objc_getAssociatedObject(vc,&sileoRequest)!=token) return;
@@ -732,8 +740,86 @@ static void showSileoText(UIViewController *vc, NSString *body, NSString *code, 
         [page presentViewController:alert animated:YES completion:nil];
     };
     if (!body.length) { present(@"تعذّرت قراءة الوصف. انتظر تحميل صفحة الحزمة وحاول مرة ثانية."); return; }
-    [engine translateIncoming:body target:code completion:^(NSString *result){ present(result.length ? result : @"تعذّرت ترجمة الوصف. حاول مرة ثانية."); }];
+    NSMutableArray *chunks=[NSMutableArray new];
+    for (NSString *line in [body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        NSString *rest=[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        while (rest.length) {
+            NSUInteger length=MIN(rest.length,1000u);
+            if (length<rest.length) {
+                NSRange space=[rest rangeOfCharacterFromSet:NSCharacterSet.whitespaceCharacterSet options:NSBackwardsSearch range:NSMakeRange(0,length)];
+                if (space.location!=NSNotFound && space.location>0) length=space.location;
+                else length=NSMaxRange([rest rangeOfComposedCharacterSequenceAtIndex:length-1]);
+            }
+            [chunks addObject:[rest substringToIndex:length]];
+            rest=[[rest substringFromIndex:length] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        }
+    }
+    translateSections(chunks,0,code,[NSMutableArray new],^(NSString *result){ present(result.length ? result : @"تعذّرت ترجمة الوصف. حاول مرة ثانية."); });
 }
+static void readSileoPage(UIViewController *page, NSString *code) {
+    if (!page) return;
+    NSObject *token=[NSObject new];
+    objc_setAssociatedObject(page,&sileoRequest,token,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSMutableArray *parts=[NSMutableArray new];
+    collectDescription(page.view,NO,parts);
+    dispatch_group_t group=dispatch_group_create();
+    NSString *script=@"(()=>{const root=document.querySelector('[itemprop=description],#description,.description,article,main')||document.body;if(!root)return '';const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n,out=[];while((n=walk.nextNode())){const p=n.parentElement;if(!p||!p.getClientRects().length||p.closest('script,style,nav,footer,button,textarea,select,[hidden]'))continue;const t=n.textContent.trim();if(t)out.push(t)}return out.join(' ')})()";
+    for (NSUInteger i=0;i<parts.count;i++) {
+        if (![parts[i] isKindOfClass:WKWebView.class]) continue;
+        WKWebView *web=parts[i];
+        dispatch_group_enter(group);
+        [web evaluateJavaScript:script completionHandler:^(id value,NSError *error){
+            parts[i]=[value isKindOfClass:NSString.class]?value:@"";
+            dispatch_group_leave(group);
+        }];
+    }
+    dispatch_group_notify(group,dispatch_get_main_queue(),^{
+        NSArray *unique=[[NSOrderedSet orderedSetWithArray:parts] array];
+        showSileoText(page,[[unique componentsJoinedByString:@"\n\n"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet],code,token);
+    });
+}
+@interface MXLanguagePicker : UITableViewController <UISearchBarDelegate>
+@property(nonatomic,copy) NSArray<NSDictionary *> *languages;
+@property(nonatomic,copy) NSArray<NSDictionary *> *shown;
+@property(nonatomic,copy) void (^choose)(NSString *);
+@end
+@implementation MXLanguagePicker
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"لغة وصف الحزمة";
+    self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(closePicker)];
+    UISearchBar *search=[[UISearchBar alloc] initWithFrame:CGRectMake(0,0,320,52)];
+    search.delegate=self;
+    search.placeholder=@"ابحث عن لغة";
+    self.tableView.tableHeaderView=search;
+    NSMutableArray *rows=[NSMutableArray new];
+    NSLocale *ar=[NSLocale localeWithLocaleIdentifier:@"ar"], *en=[NSLocale localeWithLocaleIdentifier:@"en"];
+    for (NSString *code in NSLocale.ISOLanguageCodes) {
+        NSString *name=[NSLocale.currentLocale localizedStringForLanguageCode:code] ?: code;
+        NSString *terms=[@[name,[ar localizedStringForLanguageCode:code] ?: code,[en localizedStringForLanguageCode:code] ?: code,code] componentsJoinedByString:@" "];
+        [rows addObject:@{@"code":code,@"name":name,@"terms":terms}];
+    }
+    [rows sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
+    self.languages=rows; self.shown=rows;
+}
+- (void)closePicker { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)searchBar:(UISearchBar *)bar textDidChange:(NSString *)query {
+    self.shown=query.length ? [self.languages filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"terms CONTAINS[cd] %@",query]] : self.languages;
+    [self.tableView reloadData];
+}
+- (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section {return self.shown.count;}
+- (UITableViewCell *)tableView:(UITableView *)table cellForRowAtIndexPath:(NSIndexPath *)path {
+    UITableViewCell *cell=[table dequeueReusableCellWithIdentifier:@"language"] ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"language"];
+    NSDictionary *row=self.shown[path.row]; cell.textLabel.text=row[@"name"];
+    cell.accessoryType=[[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.SileoLanguage"] isEqual:row[@"code"]]?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+    return cell;
+}
+- (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
+    NSString *code=self.shown[path.row][@"code"];
+    [NSUserDefaults.standardUserDefaults setObject:code forKey:@"MaxTranslate.SileoLanguage"];
+    [self dismissViewControllerAnimated:YES completion:^{self.choose(code);}];
+}
+@end
 static void installSileoMenu(UIViewController *vc) {
     NSString *type=[[NSStringFromClass(vc.class) componentsSeparatedByString:@"."] lastObject];
     if (![type isEqual:@"PackageViewController"] && ![type isEqual:@"NativePackageViewController"]) return;
@@ -744,32 +830,12 @@ static void installSileoMenu(UIViewController *vc) {
     if (button && [items containsObject:button]) return;
     if (!button) {
         __weak UIViewController *weak=vc;
-        UIDeferredMenuElement *langs=[UIDeferredMenuElement elementWithUncachedProvider:^(void (^done)(NSArray<UIMenuElement *> *)){
-            NSLocale *locale=NSLocale.currentLocale;
-            NSMutableArray *actions=[NSMutableArray new];
-            for (NSString *code in NSLocale.ISOLanguageCodes) {
-                NSString *title=[locale localizedStringForLanguageCode:code] ?: code;
-                UIAction *item=[UIAction actionWithTitle:title image:nil identifier:nil handler:^(__unused UIAction *action){
-                    UIViewController *page=weak;
-                    if (!page) return;
-                    [NSUserDefaults.standardUserDefaults setObject:code forKey:@"MaxTranslate.SileoLanguage"];
-                    NSObject *token=[NSObject new];
-                    objc_setAssociatedObject(page,&sileoRequest,token,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    NSMutableArray *parts=[NSMutableArray new], *pages=[NSMutableArray new];
-                    collectDescription(page.view,NO,parts,pages);
-                    WKWebView *web=pages.firstObject;
-                    if (parts.count || !web) {showSileoText(page,[parts componentsJoinedByString:@"\n\n"],code,token);return;}
-                    [web evaluateJavaScript:@"(()=>{const e=document.querySelector('[itemprop=description],#description,.description,article,main')||document.body;return Array.from(e.querySelectorAll('p,li')).filter(x=>x.offsetHeight&&!x.closest('nav,footer,button')).map(x=>x.innerText.trim()).filter(Boolean).join('\\n\\n')})()" completionHandler:^(id value,NSError *error){
-                        showSileoText(weak,[value isKindOfClass:NSString.class]?value:nil,code,token);
-                    }];
-                }];
-                if ([[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.SileoLanguage"] isEqual:code]) item.state=UIMenuElementStateOn;
-                [actions addObject:item];
-            }
-            [actions sortUsingComparator:^NSComparisonResult(UIAction *a,UIAction *b){return [a.title localizedCaseInsensitiveCompare:b.title];}];
-            done(actions);
+        UIAction *open=[UIAction actionWithTitle:@"ترجمة وصف الحزمة" image:nil identifier:nil handler:^(__unused UIAction *action){
+            MXLanguagePicker *picker=[MXLanguagePicker new];
+            picker.choose=^(NSString *code){readSileoPage(weak,code);};
+            [weak presentViewController:[[UINavigationController alloc] initWithRootViewController:picker] animated:YES completion:nil];
         }];
-        button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(24) menu:[UIMenu menuWithTitle:@"لغة وصف الحزمة" children:@[langs]]];
+        button=[[UIBarButtonItem alloc] initWithTitle:nil image:conversationIcon(24) primaryAction:open menu:nil];
         button.accessibilityLabel=@"ترجمة وصف الحزمة";
         objc_setAssociatedObject(vc,&sileoItem,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
