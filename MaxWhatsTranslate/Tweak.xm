@@ -2,6 +2,51 @@
 #import <objc/runtime.h>
 #import "ConversationTranslator.h"
 
+static UIImage *conversationIcon(CGFloat width) {
+    static NSCache *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache=[NSCache new]; });
+    NSNumber *key=@(round(width));
+    UIImage *icon=[cache objectForKey:key];
+    if (icon) return icon;
+    CGFloat scale=key.doubleValue/32.0;
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(32*scale,26*scale)];
+    icon=[[renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        CGContextRef c=ctx.CGContext;
+        CGContextScaleCTM(c,scale,scale);
+        CGContextSetLineWidth(c,1.65);
+        CGContextSetLineCap(c,kCGLineCapRound);
+        CGContextSetLineJoin(c,kCGLineJoinRound);
+        for (NSUInteger index=0;index<2;index++) {
+            CGContextSaveGState(c);
+            if (index) { CGContextTranslateCTM(c,32,9); CGContextScaleCTM(c,-1,1); }
+            UIBezierPath *path=[UIBezierPath bezierPath];
+            [path moveToPoint:CGPointMake(5,1)];
+            [path addLineToPoint:CGPointMake(16,1)];
+            [path addQuadCurveToPoint:CGPointMake(20,5) controlPoint:CGPointMake(20,1)];
+            [path addLineToPoint:CGPointMake(20,10)];
+            [path addQuadCurveToPoint:CGPointMake(16,14) controlPoint:CGPointMake(20,14)];
+            [path addLineToPoint:CGPointMake(7,14)];
+            [path addLineToPoint:CGPointMake(2,16)];
+            [path addLineToPoint:CGPointMake(3,13)];
+            [path addQuadCurveToPoint:CGPointMake(1,9) controlPoint:CGPointMake(1,12)];
+            [path addLineToPoint:CGPointMake(1,5)];
+            [path addQuadCurveToPoint:CGPointMake(5,1) controlPoint:CGPointMake(1,1)];
+            [path closePath];
+            CGContextSetBlendMode(c,kCGBlendModeClear);
+            CGContextAddPath(c,path.CGPath); CGContextFillPath(c);
+            CGContextSetBlendMode(c,kCGBlendModeNormal);
+            CGContextAddPath(c,path.CGPath); CGContextStrokePath(c);
+            CGContextMoveToPoint(c,5,6); CGContextAddLineToPoint(c,16,6);
+            CGContextMoveToPoint(c,5,10); CGContextAddLineToPoint(c,13,10);
+            CGContextStrokePath(c);
+            CGContextRestoreGState(c);
+        }
+    }] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    [cache setObject:icon forKey:key];
+    return icon;
+}
+
 static ConversationTranslator *engine;
 static BOOL twitter;
 static char languageButton, sending, originalText, translatedText;
@@ -118,7 +163,7 @@ static void installMenu(UIViewController *vc) {
     }
     UIMenu *menu=[UIMenu menuWithTitle:@"ترجمة المحادثة" children:groups];
     if (!button) {
-        button=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"globe"] menu:menu];
+        button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(24) menu:menu];
         button.accessibilityLabel=@"لغة ترجمة المحادثة";
         objc_setAssociatedObject(vc,&languageButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else button.menu=menu;
@@ -619,14 +664,15 @@ static void updatePostBar(UIView *bar) {
     }
     if (!button) {
         button=[UIButton buttonWithType:UIButtonTypeSystem];
-        [button setImage:[UIImage systemImageNamed:@"globe"] forState:UIControlStateNormal];
+
         button.accessibilityLabel=@"ترجمة التغريدة";
         button.menu=postMenu(bar);button.showsMenuAsPrimaryAction=YES;
         [host addSubview:button];
         objc_setAssociatedObject(bar,&postTranslateButton,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     button.tintColor=UIColor.secondaryLabelColor;
-    [button setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:glyph-1 weight:UIImageSymbolWeightRegular] forImageInState:UIControlStateNormal];
+    UIImage *icon=conversationIcon(glyph+1);
+    if ([button imageForState:UIControlStateNormal]!=icon) [button setImage:icon forState:UIControlStateNormal];
     button.hidden=NO;
     if (button.superview!=host) [host addSubview:button];
     button.frame=slot;
