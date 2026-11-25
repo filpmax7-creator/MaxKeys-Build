@@ -773,9 +773,23 @@ static void installSileoMenu(UIViewController *vc) {
         button.accessibilityLabel=@"ترجمة وصف الحزمة";
         objc_setAssociatedObject(vc,&sileoItem,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    objc_setAssociatedObject(nav,&sileoItem,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     nav.rightBarButtonItems=[items arrayByAddingObject:button];
 }
+static NSArray *sileoNavigationItems(UINavigationItem *nav, NSArray *items) {
+    UIBarButtonItem *translation=objc_getAssociatedObject(nav,&sileoItem);
+    if (!translation || [items containsObject:translation]) return items;
+    return items.count ? [items arrayByAddingObject:translation] : @[translation];
+}
 %group SileoDescriptions
+%hook UINavigationItem
+- (void)setRightBarButtonItems:(NSArray *)items {
+    %orig(sileoNavigationItems(self,items));
+}
+- (void)setRightBarButtonItems:(NSArray *)items animated:(BOOL)animated {
+    %orig(sileoNavigationItems(self,items),animated);
+}
+%end
 %hook UIViewController
 - (void)viewDidLayoutSubviews { %orig; installSileoMenu(self); }
 - (void)viewDidAppear:(BOOL)animated { %orig; installSileoMenu(self); }
