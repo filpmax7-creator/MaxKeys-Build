@@ -5,5 +5,5 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = MaxWhatsTranslate
 MaxWhatsTranslate_FILES = Tweak.xm ConversationTranslator.m Translator.m ConversationKey.swift
 MaxWhatsTranslate_CFLAGS = -fobjc-arc
-MaxWhatsTranslate_FRAMEWORKS = UIKit Foundation NaturalLanguage CryptoKit
+MaxWhatsTranslate_FRAMEWORKS = UIKit Foundation WebKit NaturalLanguage CryptoKit
 include $(THEOS_MAKE_PATH)/tweak.mk

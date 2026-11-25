@@ -1,1 +1,1 @@
-{ Filter = { Bundles = ( "net.whatsapp.WhatsApp", "com.atebits.Tweetie2" ); }; }
+{ Filter = { Bundles = ( "net.whatsapp.WhatsApp", "com.atebits.Tweetie2", "org.coolstar.SileoStore", "org.coolstar.Sileo", "org.coolstar.SileoNightly" ); }; }

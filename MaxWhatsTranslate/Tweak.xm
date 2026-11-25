@@ -1,3 +1,4 @@
+#import <WebKit/WebKit.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import "ConversationTranslator.h"
@@ -707,7 +708,82 @@ static void updatePostBar(UIView *bar) {
 %end
 %end
 
+static char sileoItem, sileoRequest;
+static void collectDescription(UIView *view, BOOL body, NSMutableArray *parts, NSMutableArray *pages) {
+    if (view.hidden || view.alpha<0.01 || [view isKindOfClass:UIControl.class]) return;
+    NSString *type=NSStringFromClass(view.class).lowercaseString;
+    body=body || [type containsString:@"markdown"] || [type containsString:@"depictionlabel"] || [type containsString:@"descriptionview"];
+    if ([view isKindOfClass:WKWebView.class]) { [pages addObject:view]; return; }
+    if (body) {
+        id value=property(view,@"attributedText") ?: property(view,@"text");
+        if ([value isKindOfClass:NSAttributedString.class]) value=[value string];
+        if ([value isKindOfClass:NSString.class] && [value length]) { [parts addObject:value]; return; }
+    }
+    for (UIView *child in view.subviews) collectDescription(child,body,parts,pages);
+}
+static void showSileoText(UIViewController *vc, NSString *body, NSString *code, NSObject *token) {
+    if (!vc.view.window || vc.navigationController.topViewController!=vc || objc_getAssociatedObject(vc,&sileoRequest)!=token) return;
+    __weak UIViewController *weak=vc;
+    void (^present)(NSString *)=^(NSString *text){
+        UIViewController *page=weak;
+        if (!page || page.navigationController.topViewController!=page || !page.view.window || page.presentedViewController || objc_getAssociatedObject(page,&sileoRequest)!=token) return;
+        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"ترجمة وصف الحزمة" message:text preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"تم" style:UIAlertActionStyleDefault handler:nil]];
+        [page presentViewController:alert animated:YES completion:nil];
+    };
+    if (!body.length) { present(@"تعذّرت قراءة الوصف. انتظر تحميل صفحة الحزمة وحاول مرة ثانية."); return; }
+    [engine translateIncoming:body target:code completion:^(NSString *result){ present(result.length ? result : @"تعذّرت ترجمة الوصف. حاول مرة ثانية."); }];
+}
+static void installSileoMenu(UIViewController *vc) {
+    NSString *type=[[NSStringFromClass(vc.class) componentsSeparatedByString:@"."] lastObject];
+    if (![type isEqual:@"PackageViewController"] && ![type isEqual:@"NativePackageViewController"]) return;
+    UINavigationItem *nav=vc.navigationItem;
+    NSArray *items=nav.rightBarButtonItems;
+    if (!items.count) return;
+    UIBarButtonItem *button=objc_getAssociatedObject(vc,&sileoItem);
+    if (button && [items containsObject:button]) return;
+    if (!button) {
+        __weak UIViewController *weak=vc;
+        UIDeferredMenuElement *langs=[UIDeferredMenuElement elementWithUncachedProvider:^(void (^done)(NSArray<UIMenuElement *> *)){
+            NSLocale *locale=NSLocale.currentLocale;
+            NSMutableArray *actions=[NSMutableArray new];
+            for (NSString *code in NSLocale.ISOLanguageCodes) {
+                NSString *title=[locale localizedStringForLanguageCode:code] ?: code;
+                UIAction *item=[UIAction actionWithTitle:title image:nil identifier:nil handler:^(__unused UIAction *action){
+                    UIViewController *page=weak;
+                    if (!page) return;
+                    [NSUserDefaults.standardUserDefaults setObject:code forKey:@"MaxTranslate.SileoLanguage"];
+                    NSObject *token=[NSObject new];
+                    objc_setAssociatedObject(page,&sileoRequest,token,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    NSMutableArray *parts=[NSMutableArray new], *pages=[NSMutableArray new];
+                    collectDescription(page.view,NO,parts,pages);
+                    WKWebView *web=pages.firstObject;
+                    if (parts.count || !web) {showSileoText(page,[parts componentsJoinedByString:@"\n\n"],code,token);return;}
+                    [web evaluateJavaScript:@"(()=>{const e=document.querySelector('[itemprop=description],#description,.description,article,main')||document.body;return Array.from(e.querySelectorAll('p,li')).filter(x=>x.offsetHeight&&!x.closest('nav,footer,button')).map(x=>x.innerText.trim()).filter(Boolean).join('\\n\\n')})()" completionHandler:^(id value,NSError *error){
+                        showSileoText(weak,[value isKindOfClass:NSString.class]?value:nil,code,token);
+                    }];
+                }];
+                if ([[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.SileoLanguage"] isEqual:code]) item.state=UIMenuElementStateOn;
+                [actions addObject:item];
+            }
+            [actions sortUsingComparator:^NSComparisonResult(UIAction *a,UIAction *b){return [a.title localizedCaseInsensitiveCompare:b.title];}];
+            done(actions);
+        }];
+        button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(24) menu:[UIMenu menuWithTitle:@"لغة وصف الحزمة" children:@[langs]]];
+        button.accessibilityLabel=@"ترجمة وصف الحزمة";
+        objc_setAssociatedObject(vc,&sileoItem,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    nav.rightBarButtonItems=[items arrayByAddingObject:button];
+}
+%group SileoDescriptions
+%hook UIViewController
+- (void)viewDidLayoutSubviews { %orig; installSileoMenu(self); }
+- (void)viewDidAppear:(BOOL)animated { %orig; installSileoMenu(self); }
+%end
+%end
+
 %ctor {
+    if ([NSBundle.mainBundle.bundleIdentifier.lowercaseString hasPrefix:@"org.coolstar.sileo"]) { engine=[ConversationTranslator new]; %init(SileoDescriptions); return; }
     twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
     if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
         engine=[ConversationTranslator new];
