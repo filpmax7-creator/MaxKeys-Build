@@ -143,11 +143,17 @@ static UITextView *activeEditor(UIView *root) {
 %hook UIControl
 - (void)sendAction:(SEL)action to:(id)target forEvent:(UIEvent *)event {
     NSString *replyLanguage=[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.ReplyLanguage"];
-    if (twitter && replyLanguage.length && target && [self.accessibilityIdentifier isEqual:@"ComposeSendTweetButton"]) {
-        UITextView *editor=activeEditor(self.window);
+    BOOL inlineReply=[self.accessibilityIdentifier isEqual:@"PersistentReplySubmitButton"];
+    if (twitter && replyLanguage.length && target && (inlineReply || [self.accessibilityIdentifier isEqual:@"ComposeSendTweetButton"])) {
+        UIView *scope=self.window;
+        if (inlineReply) {
+            scope=self.superview;
+            while (scope && ![scope isKindOfClass:NSClassFromString(@"T1PersistentComposeView")]) scope=scope.superview;
+        }
+        UITextView *editor=activeEditor(scope);
         UIResponder *context=editor;
         while (context && ![context isKindOfClass:NSClassFromString(@"T1TweetComposeSingleTweetViewController")]) context=context.nextResponder;
-        if ([[context valueForKey:@"isReply"] boolValue] && editor.text.length) {
+        if ((inlineReply || [[context valueForKey:@"isReply"] boolValue]) && editor.text.length) {
             if (objc_getAssociatedObject(editor,&sending)) return;
             NSString *draft=[editor.text copy];
             objc_setAssociatedObject(editor,&sending,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
