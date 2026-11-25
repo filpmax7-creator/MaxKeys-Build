@@ -835,7 +835,8 @@ static void installSileoMenu(UIViewController *vc) {
             picker.choose=^(NSString *code){readSileoPage(weak,code);};
             [weak presentViewController:[[UINavigationController alloc] initWithRootViewController:picker] animated:YES completion:nil];
         }];
-        button=[[UIBarButtonItem alloc] initWithTitle:nil image:conversationIcon(24) primaryAction:open menu:nil];
+        open.image=conversationIcon(24);
+        button=[[UIBarButtonItem alloc] initWithPrimaryAction:open];
         button.accessibilityLabel=@"ترجمة وصف الحزمة";
         objc_setAssociatedObject(vc,&sileoItem,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
