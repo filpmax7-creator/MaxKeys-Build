@@ -709,13 +709,15 @@ static void updatePostBar(UIView *bar) {
 %end
 
 static char sileoItem, sileoRequest;
+extern "C" void *MXDepictionRoot(const void *);
+extern "C" void *MXDepictionText(const void *);
 static void collectDescription(UIView *view, BOOL body, NSMutableArray *parts) {
     if (view.hidden || view.alpha<0.01) return;
     NSString *type=NSStringFromClass(view.class).lowercaseString;
     if ([view isKindOfClass:WKWebView.class]) { [parts addObject:view]; return; }
     body=body || [type containsString:@"markdown"] || [type containsString:@"depictionlabel"] || [type containsString:@"descriptionview"] || [type containsString:@"depictiontext"];
     if (body) {
-        id value=property(view,@"attributedText") ?: property(view,@"attributedString") ?: property(view,@"text");
+        id value=CFBridgingRelease(MXDepictionText((__bridge const void *)view)) ?: property(view,@"attributedText") ?: property(view,@"attributedString") ?: property(view,@"text");
         if ([value isKindOfClass:NSAttributedString.class]) value=[value string];
         if ([value isKindOfClass:NSString.class] && [value length]) { [parts addObject:value]; return; }
     }
@@ -761,7 +763,9 @@ static void readSileoPage(UIViewController *page, NSString *code) {
     NSObject *token=[NSObject new];
     objc_setAssociatedObject(page,&sileoRequest,token,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSMutableArray *parts=[NSMutableArray new];
-    collectDescription(page.view,NO,parts);
+    UIView *root=CFBridgingRelease(MXDepictionRoot((__bridge const void *)page));
+    if (root && [root isDescendantOfView:page.view]) collectDescription(root,YES,parts);
+    else collectDescription(page.view,NO,parts);
     dispatch_group_t group=dispatch_group_create();
     NSString *script=@"(()=>{const root=document.querySelector('[itemprop=description],#description,.description,article,main')||document.body;if(!root)return '';const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n,out=[];while((n=walk.nextNode())){const p=n.parentElement;if(!p||!p.getClientRects().length||p.closest('script,style,nav,footer,button,textarea,select,[hidden]'))continue;const t=n.textContent.trim();if(t)out.push(t)}return out.join(' ')})()";
     for (NSUInteger i=0;i<parts.count;i++) {

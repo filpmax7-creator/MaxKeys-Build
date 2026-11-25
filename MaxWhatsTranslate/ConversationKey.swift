@@ -1,3 +1,4 @@
+import UIKit
 import Foundation
 import CryptoKit
 
@@ -47,4 +48,30 @@ public func outgoingMessage(_ raw: UnsafeRawPointer) -> Int32 {
         return -1
     }
     return inspect(holder, depth: 0)
+}
+
+private func sileoField<T>(_ owner: AnyObject, _ names: [String], as type: T.Type) -> T? {
+    var mirror: Mirror? = Mirror(reflecting: owner)
+    while let current = mirror {
+        for child in current.children where names.contains(child.label ?? "") {
+            if let value = child.value as? T { return value }
+        }
+        mirror = current.superclassMirror
+    }
+    return nil
+}
+
+@_cdecl("MXDepictionRoot")
+public func depictionRoot(_ raw: UnsafeRawPointer) -> UnsafeMutableRawPointer? {
+    let owner = Unmanaged<AnyObject>.fromOpaque(raw).takeUnretainedValue()
+    guard let view = sileoField(owner, ["depictionView", "depiction", "$__lazy_storage_$_depiction"], as: UIView.self) else { return nil }
+    return Unmanaged.passRetained(view).toOpaque()
+}
+
+@_cdecl("MXDepictionText")
+public func depictionText(_ raw: UnsafeRawPointer) -> UnsafeMutableRawPointer? {
+    let owner = Unmanaged<AnyObject>.fromOpaque(raw).takeUnretainedValue()
+    let rich = sileoField(owner, ["attributedString", "attributedText"], as: NSAttributedString.self)
+    guard let text = rich?.string, !text.isEmpty else { return nil }
+    return Unmanaged.passRetained(text as NSString).toOpaque()
 }
