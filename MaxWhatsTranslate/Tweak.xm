@@ -3,6 +3,22 @@
 #import <objc/runtime.h>
 #import "ConversationTranslator.h"
 
+
+static void sendUpdatedDraft(UITextView *field, UIControl *button, NSString *result, void (^send)(void)) {
+    UIWindow *window = field.window;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (window && field.window == window && button.window == window && [field.text isEqualToString:result]) send();
+    });
+}
+
+static void fitTranslation(UIButton *button, CGRect frame) {
+    button.frame = frame;
+    button.clipsToBounds = YES;
+    button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    CGFloat lineHeight = MAX(1, button.titleLabel.font.lineHeight);
+    button.titleLabel.numberOfLines = MAX(1, (NSInteger)floor(CGRectGetHeight(frame) / lineHeight));
+}
+
 static UIImage *conversationIcon(CGFloat width) {
     static NSCache *cache;
     static dispatch_once_t once;
@@ -217,7 +233,7 @@ static UITextView *activeEditor(UIView *root) {
                 if (!result.length) {note(controller(field),@"تعذّرت ترجمة الرد. مسودتك محفوظة.");return;}
                 UITextRange *range=[field textRangeFromPosition:field.beginningOfDocument toPosition:field.endOfDocument];
                 [field replaceRange:range withText:result];
-                if ([field.text isEqual:result]) [UIApplication.sharedApplication sendAction:action to:receiver from:button forEvent:nil];
+                sendUpdatedDraft(field, button, result, ^{ [UIApplication.sharedApplication sendAction:action to:receiver from:button forEvent:nil]; });
             }];
             return;
         }
@@ -250,7 +266,7 @@ static UITextView *activeEditor(UIView *root) {
         if (!result.length) { note(current,@"\u062a\u0639\u0630\u0631\u062a \u0627\u0644\u062a\u0631\u062c\u0645\u0629. \u0645\u0633\u0648\u062f\u062a\u0643 \u0645\u062d\u0641\u0648\u0638\u0629."); return; }
         UITextRange *range=[field textRangeFromPosition:field.beginningOfDocument toPosition:field.endOfDocument];
         [field replaceRange:range withText:result];
-        if ([field.text isEqual:result]) [UIApplication.sharedApplication sendAction:action to:receiver from:button forEvent:nil];
+        sendUpdatedDraft(field, button, result, ^{ [UIApplication.sharedApplication sendAction:action to:receiver from:button forEvent:nil]; });
     }];
 }
 %end
@@ -444,7 +460,7 @@ static void updateSlice(UIView *slice) {
     NSArray *key=sliceIdentity(slice);
     UIButton *old=objc_getAssociatedObject(slice,&sliceButton);
     if ([key isEqual:objc_getAssociatedObject(slice,&sliceRequest)]) {
-        if (old && old.superview==slice) [slice bringSubviewToFront:old];
+        if (old && old.superview==slice) { fitTranslation(old, slice.bounds); [slice bringSubviewToFront:old]; }
         return;
     }
     [old removeFromSuperview];
@@ -473,6 +489,7 @@ static void updateSlice(UIView *slice) {
         button.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
         button.titleLabel.adjustsFontSizeToFitWidth=YES;
         button.titleLabel.minimumScaleFactor=0.8;
+        fitTranslation(button, current.bounds);
         [button setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
         [button setTitle:result forState:UIControlStateNormal];
         button.accessibilityHint=@"عرض الأصل والترجمة كاملة";
@@ -527,7 +544,7 @@ static void updateSlice(UIView *slice) {
                     ![chatID(controller(field)) isEqual:key] || ![setting(key) isEqual:target]) return;
                 if (!result.length) { note(controller(field),@"تعذّرت الترجمة. المسودة محفوظة."); return; }
                 [field replaceRange:[field textRangeFromPosition:field.beginningOfDocument toPosition:field.endOfDocument] withText:result];
-                if ([field.text isEqual:result]) [sender sendActionsForControlEvents:UIControlEventTouchUpInside];
+                sendUpdatedDraft(field, sender, result, ^{ [sender sendActionsForControlEvents:UIControlEventTouchUpInside]; });
             }];
         }] forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:proxy];
@@ -1054,7 +1071,7 @@ static void igInstallHeader(UIViewController *vc, UINavigationBar *bar) {
         }
         UITextRange *range=[f textRangeFromPosition:f.beginningOfDocument toPosition:f.endOfDocument];
         [f replaceRange:range withText:result];
-        if ([f.text isEqual:result]) [UIApplication.sharedApplication sendAction:action to:receiver from:btn forEvent:nil];
+        sendUpdatedDraft(f, btn, result, ^{ [UIApplication.sharedApplication sendAction:action to:receiver from:btn forEvent:nil]; });
     }];
 }
 %end
@@ -1083,7 +1100,7 @@ static void igBubble(UIView *bubble) {
     }
     NSArray *key=incoming?@[context,code,original]:nil;
     CGRect frame=display?[display convertRect:display.bounds toView:bubble]:CGRectZero;
-    if (key && [key isEqual:objc_getAssociatedObject(bubble,&igRequest)]) {caption.frame=frame;return;}
+    if (key && [key isEqual:objc_getAssociatedObject(bubble,&igRequest)]) {if (caption) fitTranslation(caption, CGRectIntersection(frame,bubble.bounds));return;}
     [caption removeFromSuperview];
     objc_setAssociatedObject(bubble,&igCaption,nil,OBJC_ASSOCIATION_ASSIGN);
     objc_setAssociatedObject(bubble,&igRequest,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1109,7 +1126,7 @@ static void igBubble(UIView *bubble) {
         btn.frame=[current convertRect:current.bounds toView:v];
         btn.clipsToBounds=YES;
         btn.titleLabel.clipsToBounds=YES;
-        btn.titleLabel.numberOfLines=MAX(1,(NSInteger)floor(CGRectGetHeight(btn.bounds)/btn.titleLabel.font.lineHeight));
+        fitTranslation(btn, CGRectIntersection(btn.frame,v.bounds));
         btn.accessibilityLabel=result;
         [v addSubview:btn];
         objc_setAssociatedObject(v,&igCaption,btn,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
