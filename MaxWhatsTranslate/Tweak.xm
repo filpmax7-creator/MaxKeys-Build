@@ -926,22 +926,32 @@ static UIMenu *igMenu(UIViewController *vc, NSString *context) {
     }]];
     return [UIMenu menuWithTitle:@"ترجمة إنستغرام" children:items];
 }
+static char igFieldContext;
 static void igEditorButton(UITextView *field) {
-    NSString *context=igContext(field);
-    if (!context || [context hasPrefix:@"IG.thread."]) return;
-    UIToolbar *toolbar=objc_getAssociatedObject(field,&igControl);
-    if (!toolbar && !field.inputAccessoryView) {
-        toolbar=[[UIToolbar alloc] initWithFrame:CGRectMake(0,0,320,40)];
-        objc_setAssociatedObject(field,&igControl,toolbar,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        field.inputAccessoryView=toolbar;
-        [field reloadInputViews];
+    if (![field isKindOfClass:NSClassFromString(@"IGDirectKeyboardTextView")] && ![field isKindOfClass:NSClassFromString(@"IGTextViewImagePasteSupporting")]) return;
+    UIView *host=field.superview;
+    NSString *context=field.window?igContext(field):nil;
+    UIButton *button=objc_getAssociatedObject(field,&igControl);
+    if (!context || !host) { [button removeFromSuperview]; return; }
+    if (!button) {
+        button=[UIButton buttonWithType:UIButtonTypeSystem];
+        [button setImage:conversationIcon(19) forState:UIControlStateNormal];
+        button.accessibilityLabel=@"لغة الترجمة"; button.showsMenuAsPrimaryAction=YES;
+        objc_setAssociatedObject(field,&igControl,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (!toolbar) return;
-    UIBarButtonItem *button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(22) menu:igMenu(controller(field),context)];
-    button.accessibilityLabel=@"لغة الترجمة";
-    NSString *code=[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,NO)];
-    UIBarButtonItem *language=[[UIBarButtonItem alloc] initWithTitle:(code?[NSLocale.currentLocale localizedStringForLanguageCode:code]:@"لغة الترجمة") style:UIBarButtonItemStylePlain target:nil action:nil];
-    toolbar.items=@[button,language];
+    if (![context isEqual:objc_getAssociatedObject(button,&igFieldContext)]) {
+        button.menu=igMenu(controller(field),context);
+        objc_setAssociatedObject(button,&igFieldContext,context,OBJC_ASSOCIATION_COPY_NONATOMIC);
+    }
+    if (button.superview!=host) [host addSubview:button];
+    CGRect frame=[field convertRect:field.bounds toView:host];
+    CGFloat width=MIN(32,CGRectGetWidth(frame));
+    BOOL rtl=field.effectiveUserInterfaceLayoutDirection==UIUserInterfaceLayoutDirectionRightToLeft;
+    button.frame=CGRectMake(rtl?CGRectGetMinX(frame):CGRectGetMaxX(frame)-width,CGRectGetMinY(frame),width,CGRectGetHeight(frame));
+    UIEdgeInsets inset=field.textContainerInset;
+    if (rtl && inset.left<width+2) {inset.left=width+2;field.textContainerInset=inset;}
+    if (!rtl && inset.right<width+2) {inset.right=width+2;field.textContainerInset=inset;}
+    [host bringSubviewToFront:button];
 }
 static char igThreadOwner, igMenuContext;
 static UIView *igCallIn(UIView *view) {
@@ -972,7 +982,13 @@ static void igInstallHeader(UIViewController *vc, UINavigationBar *bar) {
     [ordered removeObject:button]; [ordered insertObject:button atIndex:0];
     item.rightBarButtonItems=ordered;
 }
-%group IGTranslation
+%group IGFieldControls
+%hook UITextView
+- (void)layoutSubviews { %orig; igEditorButton(self); }
+- (void)didMoveToWindow { %orig; igEditorButton(self); }
+%end
+%end
+%group IGHeader
 %hook MXIGThread
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
@@ -1006,6 +1022,8 @@ static void igInstallHeader(UIViewController *vc, UINavigationBar *bar) {
     if (vc && vc.view.window) igInstallHeader(vc,self);
 }
 %end
+%end
+%group IGTranslation
 %hook UIControl
 - (void)sendAction:(SEL)action to:(id)target forEvent:(UIEvent *)event {
     BOOL comment=action==NSSelectorFromString(@"onSendButtonTap") && igAncestor(self,@"IGCommentComposerView");
@@ -1095,7 +1113,9 @@ static void igBubble(UIView *bubble) {
     if ([NSBundle.mainBundle.bundleIdentifier isEqual:@"com.burbn.instagram"]) {
         engine=[ConversationTranslator new];
         Class thread=NSClassFromString(@"IGDirectThreadViewController");
-        if (thread) { %init(IGTranslation, MXIGThread=thread); }
+        %init(IGFieldControls);
+        %init(IGTranslation);
+        if (thread) { %init(IGHeader, MXIGThread=thread); }
         Class bubbleClass=NSClassFromString(@"IGDirectTextMessageBubbleView");
         if (bubbleClass) { %init(IGBubbles, MXIGBubble=bubbleClass); }
         [NSNotificationCenter.defaultCenter addObserverForName:UITextViewTextDidBeginEditingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){igEditorButton(n.object);}];
