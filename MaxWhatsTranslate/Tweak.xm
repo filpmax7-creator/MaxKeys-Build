@@ -799,6 +799,7 @@ static void readSileoPage(UIViewController *page, NSString *code) {
     });
 }
 @interface MXLanguagePicker : UITableViewController <UISearchBarDelegate>
+@property(nonatomic,copy) NSString *preferenceKey;
 @property(nonatomic,copy) NSArray<NSDictionary *> *languages;
 @property(nonatomic,copy) NSArray<NSDictionary *> *shown;
 @property(nonatomic,copy) void (^choose)(NSString *);
@@ -806,7 +807,8 @@ static void readSileoPage(UIViewController *page, NSString *code) {
 @implementation MXLanguagePicker
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"لغة وصف الحزمة";
+    if (!self.title) self.title=@"لغة وصف الحزمة";
+    if (!self.preferenceKey) self.preferenceKey=@"MaxTranslate.SileoLanguage";
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(closePicker)];
     UISearchBar *search=[[UISearchBar alloc] initWithFrame:CGRectMake(0,0,320,52)];
     search.delegate=self;
@@ -831,12 +833,12 @@ static void readSileoPage(UIViewController *page, NSString *code) {
 - (UITableViewCell *)tableView:(UITableView *)table cellForRowAtIndexPath:(NSIndexPath *)path {
     UITableViewCell *cell=[table dequeueReusableCellWithIdentifier:@"language"] ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"language"];
     NSDictionary *row=self.shown[path.row]; cell.textLabel.text=row[@"name"];
-    cell.accessoryType=[[NSUserDefaults.standardUserDefaults stringForKey:@"MaxTranslate.SileoLanguage"] isEqual:row[@"code"]]?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+    cell.accessoryType=[[NSUserDefaults.standardUserDefaults stringForKey:self.preferenceKey] isEqual:row[@"code"]]?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     return cell;
 }
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
     NSString *code=self.shown[path.row][@"code"];
-    [NSUserDefaults.standardUserDefaults setObject:code forKey:@"MaxTranslate.SileoLanguage"];
+    [NSUserDefaults.standardUserDefaults setObject:code forKey:self.preferenceKey];
     [self dismissViewControllerAnimated:YES completion:^{self.choose(code);}];
 }
 @end
@@ -883,7 +885,180 @@ static NSArray *sileoNavigationItems(UINavigationItem *nav, NSArray *items) {
 %end
 %end
 
+static char igControl, igRequest, igCaption;
+static UIResponder *igAncestor(UIResponder *r, NSString *type) {
+    Class cls=NSClassFromString(type);
+    for (;r;r=r.nextResponder) if ([r isKindOfClass:cls]) return r;
+    return nil;
+}
+static NSString *igContext(UIResponder *r) {
+    id thread=igAncestor(r,@"IGDirectThreadViewController");
+    id ident=property(thread,@"threadId");
+    if ([ident isKindOfClass:NSString.class] && [ident length]) return [@"IG.thread." stringByAppendingString:ident];
+    if (igAncestor(r,@"IGStoryViewerViewController")) return @"IG.story";
+    if (igAncestor(r,@"IGCommentComposerView")) return @"IG.comments";
+    return nil;
+}
+static NSString *igKey(NSString *context, BOOL incoming) {
+    return [context stringByAppendingString:incoming?@".incoming":@".outgoing"];
+}
+static void igPick(UIViewController *vc, NSString *key, NSString *title) {
+    MXLanguagePicker *picker=[MXLanguagePicker new];
+    picker.preferenceKey=key; picker.title=title;
+    __weak UIViewController *weak=vc;
+    picker.choose=^(__unused NSString *code){
+        UIViewController *page=weak;
+        [NSNotificationCenter.defaultCenter postNotificationName:@"MXIGLanguageChanged" object:page];
+    };
+    [vc presentViewController:[[UINavigationController alloc] initWithRootViewController:picker] animated:YES completion:nil];
+}
+static UIMenu *igMenu(UIViewController *vc, NSString *context) {
+    __weak UIViewController *weak=vc;
+    NSMutableArray *items=[NSMutableArray new];
+    for (NSNumber *dir in ([context hasPrefix:@"IG.thread."] ? @[@NO,@YES] : @[@NO])) {
+        NSString *title=dir.boolValue?@"لغة الوارد":([context isEqual:@"IG.comments"]?@"لغة التعليقات":([context isEqual:@"IG.story"]?@"لغة رد الستوري":@"لغة الصادر"));
+        NSString *key=igKey(context,dir.boolValue);
+        [items addObject:[UIAction actionWithTitle:title image:nil identifier:nil handler:^(__unused UIAction *action){igPick(weak,key,title);}]];
+    }
+    [items addObject:[UIAction actionWithTitle:@"إيقاف الترجمة" image:nil identifier:nil handler:^(__unused UIAction *action){
+        for (NSNumber *dir in @[@NO,@YES]) [NSUserDefaults.standardUserDefaults removeObjectForKey:igKey(context,dir.boolValue)];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"MXIGLanguageChanged" object:weak];
+    }]];
+    return [UIMenu menuWithTitle:@"ترجمة إنستغرام" children:items];
+}
+static void igEditorButton(UITextView *field) {
+    NSString *context=igContext(field);
+    if (!context || [context hasPrefix:@"IG.thread."]) return;
+    UIToolbar *toolbar=objc_getAssociatedObject(field,&igControl);
+    if (!toolbar && !field.inputAccessoryView) {
+        toolbar=[[UIToolbar alloc] initWithFrame:CGRectMake(0,0,320,40)];
+        objc_setAssociatedObject(field,&igControl,toolbar,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        field.inputAccessoryView=toolbar;
+        [field reloadInputViews];
+    }
+    if (!toolbar) return;
+    UIBarButtonItem *button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(22) menu:igMenu(controller(field),context)];
+    button.accessibilityLabel=@"لغة الترجمة";
+    NSString *code=[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,NO)];
+    UIBarButtonItem *language=[[UIBarButtonItem alloc] initWithTitle:(code?[NSLocale.currentLocale localizedStringForLanguageCode:code]:@"لغة الترجمة") style:UIBarButtonItemStylePlain target:nil action:nil];
+    toolbar.items=@[button,language];
+}
+%group IGTranslation
+%hook MXIGThread
+- (void)viewDidLayoutSubviews {
+    %orig;
+    UIViewController *vc=(UIViewController *)self;
+    NSString *context=igContext(vc); if (!context) return;
+    UIBarButtonItem *button=objc_getAssociatedObject(vc,&igControl);
+    if (!button) {
+        button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(23) menu:igMenu(vc,context)];
+        button.accessibilityLabel=@"ترجمة المحادثة";
+        objc_setAssociatedObject(vc,&igControl,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSArray *items=vc.navigationItem.rightBarButtonItems ?: @[];
+    if (![items containsObject:button]) vc.navigationItem.rightBarButtonItems=[items arrayByAddingObject:button];
+}
+%end
+%hook UIControl
+- (void)sendAction:(SEL)action to:(id)target forEvent:(UIEvent *)event {
+    BOOL comment=action==NSSelectorFromString(@"onSendButtonTap") && igAncestor(self,@"IGCommentComposerView");
+    NSString *label=self.accessibilityLabel.lowercaseString;
+    BOOL send=[self isKindOfClass:NSClassFromString(@"IGDirectComposerButton")] && [@[@"send",@"إرسال",@"ارسال"] containsObject:label];
+    if (!comment && !send) { %orig;return; }
+    NSString *context=igContext(self);
+    NSString *code=context?[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,NO)]:nil;
+    if (!code || !target) { %orig;return; }
+    UIView *scope=(UIView *)igAncestor(self,comment?@"IGCommentComposerView":@"IGDirectComposer.IGDirectComposer");
+    UITextView *field=activeEditor(scope);
+    NSString *draft=[field.text copy];
+    if (!draft.length || objc_getAssociatedObject(field,&sending)) return;
+    objc_setAssociatedObject(field,&sending,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UITextView *weakField=field; __weak UIControl *weakButton=self; __weak id weakTarget=target;
+    [engine translateIncoming:draft target:code completion:^(NSString *result){
+        UITextView *f=weakField; UIControl *btn=weakButton; id receiver=weakTarget;
+        if (!f) return;
+        objc_setAssociatedObject(f,&sending,nil,OBJC_ASSOCIATION_ASSIGN);
+        if (!f.window || f.window!=btn.window || !receiver || ![igContext(btn) isEqual:context] || ![f.text isEqual:draft] ||
+            ![[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,NO)] isEqual:code]) return;
+        if (!result.length) {
+            UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"تعذّرت الترجمة" message:@"مسودتك محفوظة." preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"تم" style:UIAlertActionStyleDefault handler:nil]];
+            [controller(f) presentViewController:alert animated:YES completion:nil]; return;
+        }
+        UITextRange *range=[f textRangeFromPosition:f.beginningOfDocument toPosition:f.endOfDocument];
+        [f replaceRange:range withText:result];
+        if ([f.text isEqual:result]) [UIApplication.sharedApplication sendAction:action to:receiver from:btn forEvent:nil];
+    }];
+}
+%end
+%end
+
+static void igBubble(UIView *bubble) {
+    NSString *context=igContext(bubble);
+    if (!context || !bubble.window) return;
+    UICollectionViewCell *cell=(id)igAncestor(bubble,@"IGDirectTextMessageUISwift.IGDirectTextMessageCell");
+    if (!cell) return;
+    id model=property(cell,@"messageCellViewModel");
+    int32_t direction=model?MXOutgoingMessage((__bridge const void *)model):-1;
+    UIView *textView=property(bubble,@"textView");
+    id rich=property(textView,@"attributedText");
+    if (![rich isKindOfClass:NSAttributedString.class] || ![textView respondsToSelector:@selector(setAttributedText:)]) return;
+    NSArray *saved=objc_getAssociatedObject(bubble,&igCaption);
+    NSAttributedString *original=([saved count]==2 && [rich isEqual:saved[1]])?saved[0]:rich;
+    NSString *code=[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,YES)];
+    if (direction<0) {
+        CGRect frame=[bubble convertRect:bubble.bounds toView:cell.contentView];
+        CGFloat left=CGRectGetMinX(frame),right=CGRectGetWidth(cell.contentView.bounds)-CGRectGetMaxX(frame);
+        if (fabs(left-right)>6) {
+            BOOL leading=cell.effectiveUserInterfaceLayoutDirection==UIUserInterfaceLayoutDirectionRightToLeft?right<left:left<right;
+            direction=leading?0:1;
+        }
+    }
+    if (!code || direction!=0 || !original.length) {
+        objc_setAssociatedObject(bubble,&igRequest,nil,OBJC_ASSOCIATION_ASSIGN);
+        objc_setAssociatedObject(bubble,&igCaption,nil,OBJC_ASSOCIATION_ASSIGN);
+        if (original!=rich) [textView setValue:original forKey:@"attributedText"];
+        return;
+    }
+    NSArray *key=@[context,code,original.string];
+    if ([key isEqual:objc_getAssociatedObject(bubble,&igRequest)] && (!saved || [rich isEqual:saved[1]])) return;
+    objc_setAssociatedObject(bubble,&igRequest,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weak=bubble;
+    [engine translateIncoming:original.string target:code completion:^(NSString *result){
+        UIView *v=weak;
+        if (!v.window || ![igContext(v) isEqual:context] || ![objc_getAssociatedObject(v,&igRequest) isEqual:key] ||
+            ![[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,YES)] isEqual:code]) return;
+        if (!result.length) {objc_setAssociatedObject(v,&igRequest,nil,OBJC_ASSOCIATION_ASSIGN);return;}
+        if ([result isEqual:original.string]) return;
+        UIView *display=property(v,@"textView");
+        if (![property(display,@"attributedText") isEqual:rich]) return;
+        NSMutableAttributedString *combined=[original mutableCopy];
+        [combined appendAttributedString:[[NSAttributedString alloc] initWithString:[@"\n" stringByAppendingString:result] attributes:@{NSFontAttributeName:[UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],NSForegroundColorAttributeName:UIColor.secondaryLabelColor}]];
+        objc_setAssociatedObject(v,&igCaption,@[original,combined],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [display setValue:combined forKey:@"attributedText"]; [display invalidateIntrinsicContentSize];
+    }];
+}
+%group IGBubbles
+%hook MXIGBubble
+- (void)layoutSubviews { %orig; igBubble((UIView *)self); }
+%end
+%end
+
 %ctor {
+    if ([NSBundle.mainBundle.bundleIdentifier isEqual:@"com.burbn.instagram"]) {
+        engine=[ConversationTranslator new];
+        Class thread=NSClassFromString(@"IGDirectThreadViewController");
+        if (thread) { %init(IGTranslation, MXIGThread=thread); }
+        Class bubbleClass=NSClassFromString(@"IGDirectTextMessageBubbleView");
+        if (bubbleClass) { %init(IGBubbles, MXIGBubble=bubbleClass); }
+        [NSNotificationCenter.defaultCenter addObserverForName:UITextViewTextDidBeginEditingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){igEditorButton(n.object);}];
+        [NSNotificationCenter.defaultCenter addObserverForName:@"MXIGLanguageChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){
+            UIViewController *vc=n.object;
+            NSMutableArray *views=[NSMutableArray new]; if(vc.view) [views addObject:vc.view];
+            for(NSUInteger i=0;i<views.count;i++){UIView *v=views[i]; if ([v isKindOfClass:bubbleClass]) [v setNeedsLayout]; [views addObjectsFromArray:v.subviews];}
+        }];
+        return;
+    }
     if ([NSBundle.mainBundle.bundleIdentifier.lowercaseString hasPrefix:@"org.coolstar.sileo"]) { engine=[ConversationTranslator new]; %init(SileoDescriptions); return; }
     twitter=[NSBundle.mainBundle.bundleIdentifier isEqual:@"com.atebits.Tweetie2"];
     if (twitter || [NSBundle.mainBundle.bundleIdentifier isEqual:@"net.whatsapp.WhatsApp"]) {
