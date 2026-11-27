@@ -943,20 +943,67 @@ static void igEditorButton(UITextView *field) {
     UIBarButtonItem *language=[[UIBarButtonItem alloc] initWithTitle:(code?[NSLocale.currentLocale localizedStringForLanguageCode:code]:@"لغة الترجمة") style:UIBarButtonItemStylePlain target:nil action:nil];
     toolbar.items=@[button,language];
 }
-%group IGTranslation
-%hook MXIGThread
-- (void)viewDidLayoutSubviews {
-    %orig;
-    UIViewController *vc=(UIViewController *)self;
-    NSString *context=igContext(vc); if (!context) return;
+static char igThreadOwner, igMenuContext;
+static UIView *igCallIn(UIView *view) {
+    if ([view isKindOfClass:NSClassFromString(@"IGDirectCallButton")]) return view;
+    for (UIView *child in view.subviews) {
+        UIView *hit=igCallIn(child);
+        if (hit) return hit;
+    }
+    return nil;
+}
+static void igInstallHeader(UIViewController *vc, UINavigationBar *bar) {
+    NSString *context=igContext(vc);
+    UINavigationItem *item=bar.topItem;
+    if (!context || !item || !bar.window || !igCallIn(bar)) return;
     UIBarButtonItem *button=objc_getAssociatedObject(vc,&igControl);
     if (!button) {
         button=[[UIBarButtonItem alloc] initWithImage:conversationIcon(23) menu:igMenu(vc,context)];
         button.accessibilityLabel=@"ترجمة المحادثة";
         objc_setAssociatedObject(vc,&igControl,button,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    NSArray *items=vc.navigationItem.rightBarButtonItems ?: @[];
-    if (![items containsObject:button]) vc.navigationItem.rightBarButtonItems=[items arrayByAddingObject:button];
+    if (![context isEqual:objc_getAssociatedObject(button,&igMenuContext)]) {
+        button.menu=igMenu(vc,context);
+        objc_setAssociatedObject(button,&igMenuContext,context,OBJC_ASSOCIATION_COPY_NONATOMIC);
+    }
+    NSArray *items=item.rightBarButtonItems ?: @[];
+    if (items.firstObject==button) return;
+    NSMutableArray *ordered=[items mutableCopy];
+    [ordered removeObject:button]; [ordered insertObject:button atIndex:0];
+    item.rightBarButtonItems=ordered;
+}
+%group IGTranslation
+%hook MXIGThread
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    UIViewController *vc=(UIViewController *)self;
+    UINavigationBar *bar=vc.navigationController.navigationBar;
+    if (!bar) return;
+    NSHashTable *owner=[NSHashTable weakObjectsHashTable];
+    [owner addObject:vc]; objc_setAssociatedObject(bar,&igThreadOwner,owner,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    igInstallHeader(vc,bar);
+}
+- (void)viewWillDisappear:(BOOL)animated {
+    %orig;
+    UIViewController *vc=(UIViewController *)self;
+    UINavigationBar *bar=vc.navigationController.navigationBar;
+    if (!bar) return;
+    NSHashTable *owner=objc_getAssociatedObject(bar,&igThreadOwner);
+    if (owner.anyObject!=vc) return;
+    objc_setAssociatedObject(bar,&igThreadOwner,nil,OBJC_ASSOCIATION_ASSIGN);
+    UIBarButtonItem *button=objc_getAssociatedObject(vc,&igControl);
+    if (button && [bar.topItem.rightBarButtonItems containsObject:button]) {
+        NSMutableArray *items=[bar.topItem.rightBarButtonItems mutableCopy];
+        [items removeObject:button]; bar.topItem.rightBarButtonItems=items;
+    }
+}
+%end
+%hook UINavigationBar
+- (void)layoutSubviews {
+    %orig;
+    NSHashTable *owner=objc_getAssociatedObject(self,&igThreadOwner);
+    UIViewController *vc=owner.anyObject;
+    if (vc && vc.view.window) igInstallHeader(vc,self);
 }
 %end
 %hook UIControl
