@@ -61,6 +61,15 @@ static const int kMaxAttempts = 4;
 }
 
 + (void)translate:(NSString *)text to:(NSString *)language completion:(TranslationHandler)completion {
+    // In a chat greeting the following word is often a person's name.
+    NSRegularExpression *greeting = [NSRegularExpression regularExpressionWithPattern:@"^(هلو|هلا|مرحبا|مرحبًا|أهلًا|اهلا|أهلا)[،, ]+([اآأ]يات)([!.؟، ]*)$" options:0 error:nil];
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSTextCheckingResult *match = [greeting firstMatchInString:trimmed options:0 range:NSMakeRange(0, trimmed.length)];
+    if (match && [language isEqualToString:@"en"]) {
+        NSString *reply = [@"Hello Ayat" stringByAppendingString:[trimmed substringWithRange:[match rangeAtIndex:3]]];
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(reply); });
+        return;
+    }
     [self translate:text to:language attempt:0 completion:completion];
 }
 

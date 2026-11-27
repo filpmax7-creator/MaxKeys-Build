@@ -1106,7 +1106,12 @@ static void igBubble(UIView *bubble) {
         [btn setTitle:result forState:UIControlStateNormal]; btn.titleLabel.numberOfLines=0;
         btn.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody]; btn.titleLabel.lineBreakMode=NSLineBreakByTruncatingTail;
         btn.backgroundColor=UIColor.secondarySystemBackgroundColor; btn.tintColor=UIColor.labelColor;
-        btn.frame=[current convertRect:current.bounds toView:v]; [v addSubview:btn];
+        btn.frame=[current convertRect:current.bounds toView:v];
+        btn.clipsToBounds=YES;
+        btn.titleLabel.clipsToBounds=YES;
+        btn.titleLabel.numberOfLines=MAX(1,(NSInteger)floor(CGRectGetHeight(btn.bounds)/btn.titleLabel.font.lineHeight));
+        btn.accessibilityLabel=result;
+        [v addSubview:btn];
         objc_setAssociatedObject(v,&igCaption,btn,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }];
 }
