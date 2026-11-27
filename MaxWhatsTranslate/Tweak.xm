@@ -822,6 +822,7 @@ static void readSileoPage(UIViewController *page, NSString *code) {
         [rows addObject:@{@"code":code,@"name":name,@"terms":terms}];
     }
     [rows sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];}];
+    if ([self.preferenceKey hasPrefix:@"IG."]) [rows insertObject:@{@"name":@"إيقاف الترجمة",@"code":@"",@"terms":@"إيقاف تعطيل off disable"} atIndex:0];
     self.languages=rows; self.shown=rows;
 }
 - (void)closePicker { [self dismissViewControllerAnimated:YES completion:nil]; }
@@ -838,7 +839,8 @@ static void readSileoPage(UIViewController *page, NSString *code) {
 }
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
     NSString *code=self.shown[path.row][@"code"];
-    [NSUserDefaults.standardUserDefaults setObject:code forKey:self.preferenceKey];
+    if (code.length) [NSUserDefaults.standardUserDefaults setObject:code forKey:self.preferenceKey];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:self.preferenceKey];
     [self dismissViewControllerAnimated:YES completion:^{self.choose(code);}];
 }
 @end
@@ -1058,49 +1060,54 @@ static void igInstallHeader(UIViewController *vc, UINavigationBar *bar) {
 %end
 %end
 
+static NSString *igDisplayedText(UIView *view) {
+    id text=property(view,@"text");
+    if ([text isKindOfClass:NSAttributedString.class]) text=[text string];
+    if ([text isKindOfClass:NSString.class] && [text length]) return text;
+    return view.accessibilityLabel;
+}
 static void igBubble(UIView *bubble) {
+    UIView *display=property(bubble,@"textView");
+    UIButton *caption=objc_getAssociatedObject(bubble,&igCaption);
     NSString *context=igContext(bubble);
-    if (!context || !bubble.window) return;
+    NSString *code=context?[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,YES)]:nil;
     UICollectionViewCell *cell=(id)igAncestor(bubble,@"IGDirectTextMessageUISwift.IGDirectTextMessageCell");
-    if (!cell) return;
-    id model=property(cell,@"messageCellViewModel");
-    int32_t direction=model?MXOutgoingMessage((__bridge const void *)model):-1;
-    UIView *textView=property(bubble,@"textView");
-    id rich=property(textView,@"attributedText");
-    if (![rich isKindOfClass:NSAttributedString.class] || ![textView respondsToSelector:@selector(setAttributedText:)]) return;
-    NSArray *saved=objc_getAssociatedObject(bubble,&igCaption);
-    NSAttributedString *original=([saved count]==2 && [rich isEqual:saved[1]])?saved[0]:rich;
-    NSString *code=[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,YES)];
-    if (direction<0) {
-        CGRect frame=[bubble convertRect:bubble.bounds toView:cell.contentView];
-        CGFloat left=CGRectGetMinX(frame),right=CGRectGetWidth(cell.contentView.bounds)-CGRectGetMaxX(frame);
-        if (fabs(left-right)>6) {
-            BOOL leading=cell.effectiveUserInterfaceLayoutDirection==UIUserInterfaceLayoutDirectionRightToLeft?right<left:left<right;
-            direction=leading?0:1;
-        }
+    NSString *original=code.length && bubble.window && cell?igDisplayedText(display):nil;
+    BOOL incoming=NO;
+    if (original.length) {
+        id model=property(cell,@"messageCellViewModel");
+        int32_t direction=model?MXOutgoingMessage((__bridge const void *)model):-1;
+        CGRect f=[bubble convertRect:bubble.bounds toView:cell.contentView];
+        CGFloat left=CGRectGetMinX(f),right=CGRectGetWidth(cell.contentView.bounds)-CGRectGetMaxX(f);
+        incoming=direction>=0?direction==0:(cell.effectiveUserInterfaceLayoutDirection==UIUserInterfaceLayoutDirectionRightToLeft?right+6<left:left+6<right);
     }
-    if (!code || direction!=0 || !original.length) {
-        objc_setAssociatedObject(bubble,&igRequest,nil,OBJC_ASSOCIATION_ASSIGN);
-        objc_setAssociatedObject(bubble,&igCaption,nil,OBJC_ASSOCIATION_ASSIGN);
-        if (original!=rich) [textView setValue:original forKey:@"attributedText"];
-        return;
-    }
-    NSArray *key=@[context,code,original.string];
-    if ([key isEqual:objc_getAssociatedObject(bubble,&igRequest)] && (!saved || [rich isEqual:saved[1]])) return;
+    NSArray *key=incoming?@[context,code,original]:nil;
+    CGRect frame=display?[display convertRect:display.bounds toView:bubble]:CGRectZero;
+    if (key && [key isEqual:objc_getAssociatedObject(bubble,&igRequest)]) {caption.frame=frame;return;}
+    [caption removeFromSuperview];
+    objc_setAssociatedObject(bubble,&igCaption,nil,OBJC_ASSOCIATION_ASSIGN);
     objc_setAssociatedObject(bubble,&igRequest,key,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!key) return;
     __weak UIView *weak=bubble;
-    [engine translateIncoming:original.string target:code completion:^(NSString *result){
+    [engine translateIncoming:original target:code completion:^(NSString *result){
         UIView *v=weak;
         if (!v.window || ![igContext(v) isEqual:context] || ![objc_getAssociatedObject(v,&igRequest) isEqual:key] ||
             ![[NSUserDefaults.standardUserDefaults stringForKey:igKey(context,YES)] isEqual:code]) return;
+        UIView *current=property(v,@"textView");
+        if (![igDisplayedText(current) isEqual:original]) return;
         if (!result.length) {objc_setAssociatedObject(v,&igRequest,nil,OBJC_ASSOCIATION_ASSIGN);return;}
-        if ([result isEqual:original.string]) return;
-        UIView *display=property(v,@"textView");
-        if (![property(display,@"attributedText") isEqual:rich]) return;
-        NSMutableAttributedString *combined=[original mutableCopy];
-        [combined appendAttributedString:[[NSAttributedString alloc] initWithString:[@"\n" stringByAppendingString:result] attributes:@{NSFontAttributeName:[UIFont preferredFontForTextStyle:UIFontTextStyleFootnote],NSForegroundColorAttributeName:UIColor.secondaryLabelColor}]];
-        objc_setAssociatedObject(v,&igCaption,@[original,combined],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [display setValue:combined forKey:@"attributedText"]; [display invalidateIntrinsicContentSize];
+        if ([result isEqual:original]) return;
+        UIAction *details=[UIAction actionWithHandler:^(__unused UIAction *action){
+            UIViewController *vc=controller(weak);
+            UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"ترجمة الوارد" message:[NSString stringWithFormat:@"%@\n\n%@",original,result] preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"تم" style:UIAlertActionStyleDefault handler:nil]]; [vc presentViewController:alert animated:YES completion:nil];
+        }];
+        UIButton *btn=[UIButton buttonWithType:UIButtonTypeSystem primaryAction:details];
+        [btn setTitle:result forState:UIControlStateNormal]; btn.titleLabel.numberOfLines=0;
+        btn.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody]; btn.titleLabel.lineBreakMode=NSLineBreakByTruncatingTail;
+        btn.backgroundColor=UIColor.secondarySystemBackgroundColor; btn.tintColor=UIColor.labelColor;
+        btn.frame=[current convertRect:current.bounds toView:v]; [v addSubview:btn];
+        objc_setAssociatedObject(v,&igCaption,btn,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }];
 }
 %group IGBubbles
@@ -1120,9 +1127,8 @@ static void igBubble(UIView *bubble) {
         if (bubbleClass) { %init(IGBubbles, MXIGBubble=bubbleClass); }
         [NSNotificationCenter.defaultCenter addObserverForName:UITextViewTextDidBeginEditingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){igEditorButton(n.object);}];
         [NSNotificationCenter.defaultCenter addObserverForName:@"MXIGLanguageChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){
-            UIViewController *vc=n.object;
-            NSMutableArray *views=[NSMutableArray new]; if(vc.view) [views addObject:vc.view];
-            for(NSUInteger i=0;i<views.count;i++){UIView *v=views[i]; if ([v isKindOfClass:bubbleClass]) [v setNeedsLayout]; [views addObjectsFromArray:v.subviews];}
+            NSMutableArray *views=[NSMutableArray new]; for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) if ([scene isKindOfClass:UIWindowScene.class]) [views addObjectsFromArray:((UIWindowScene *)scene).windows];
+            for(NSUInteger i=0;i<views.count;i++){UIView *v=views[i]; if ([v isKindOfClass:bubbleClass]) igBubble(v); [views addObjectsFromArray:v.subviews];}
         }];
         return;
     }
